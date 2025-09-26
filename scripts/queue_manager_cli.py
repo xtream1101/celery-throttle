@@ -130,6 +130,79 @@ class QueueManagerCLI:
 
         print(f"Results: {submitted} submitted immediately, {queued} queued for later")
 
+    def cleanup_all_queues(self):
+        """Remove all queues and their data."""
+        queues = self.queue_manager.list_queues()
+        if not queues:
+            print("No queues to clean up")
+            return
+
+        print(f"Found {len(queues)} queues to remove:")
+        for queue in queues:
+            print(f"  - {queue.name} ({queue.rate_limit})")
+
+        try:
+            response = input("\nAre you sure you want to remove ALL queues? (yes/no): ").lower().strip()
+            if response != 'yes':
+                print("Cleanup cancelled")
+                return
+        except EOFError:
+            print("Cleanup cancelled (non-interactive mode)")
+            return
+
+        removed_count = 0
+        for queue in queues:
+            if self.queue_manager.remove_queue(queue.name):
+                removed_count += 1
+                print(f"  ✓ Removed {queue.name}")
+            else:
+                print(f"  ✗ Failed to remove {queue.name}")
+
+        print(f"\nCleanup complete: {removed_count}/{len(queues)} queues removed")
+
+    def cleanup_empty_queues(self):
+        """Remove queues that have no tasks (waiting, processing, completed, or failed)."""
+        queues = self.queue_manager.list_queues()
+        if not queues:
+            print("No queues found")
+            return
+
+        empty_queues = []
+        for queue in queues:
+            stats = self.queue_manager.get_queue_stats(queue.name)
+            if stats:
+                total_tasks = (stats.tasks_waiting + stats.tasks_processing +
+                             stats.tasks_completed + stats.tasks_failed)
+                if total_tasks == 0:
+                    empty_queues.append(queue)
+
+        if not empty_queues:
+            print("No empty queues found")
+            return
+
+        print(f"Found {len(empty_queues)} empty queues:")
+        for queue in empty_queues:
+            print(f"  - {queue.name} ({queue.rate_limit}) - {'ACTIVE' if queue.active else 'INACTIVE'}")
+
+        try:
+            response = input(f"\nRemove these {len(empty_queues)} empty queues? (yes/no): ").lower().strip()
+            if response != 'yes':
+                print("Cleanup cancelled")
+                return
+        except EOFError:
+            print("Cleanup cancelled (non-interactive mode)")
+            return
+
+        removed_count = 0
+        for queue in empty_queues:
+            if self.queue_manager.remove_queue(queue.name):
+                removed_count += 1
+                print(f"  ✓ Removed {queue.name}")
+            else:
+                print(f"  ✗ Failed to remove {queue.name}")
+
+        print(f"\nCleanup complete: {removed_count}/{len(empty_queues)} empty queues removed")
+
     def print_help(self):
         """Print help information."""
         print("""
@@ -146,6 +219,8 @@ Commands:
   deactivate <queue_name>         Deactivate a queue
   show <queue_name>               Show queue details
   test <queue_name> <count>       Submit test tasks
+  cleanup-all                     Remove ALL queues (with confirmation)
+  cleanup-empty                   Remove queues with no tasks
   help                           Show this help
 
 Examples:
@@ -153,6 +228,8 @@ Examples:
   python queue_manager_cli.py list
   python queue_manager_cli.py show batch_12345678-1234-1234-1234-123456789012
   python queue_manager_cli.py test batch_12345678-1234-1234-1234-123456789012 10
+  python queue_manager_cli.py cleanup-empty
+  python queue_manager_cli.py cleanup-all
         """)
 
 
@@ -210,6 +287,12 @@ def main():
                 print("Usage: test <queue_name> <count>")
                 return
             cli.submit_test_tasks(sys.argv[2], int(sys.argv[3]))
+
+        elif command == "cleanup-all":
+            cli.cleanup_all_queues()
+
+        elif command == "cleanup-empty":
+            cli.cleanup_empty_queues()
 
         elif command == "help":
             cli.print_help()

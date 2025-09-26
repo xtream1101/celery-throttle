@@ -15,23 +15,55 @@ class RateLimit(BaseModel):
 
     @classmethod
     def from_string(cls, rate_string: str) -> "RateLimit":
-        """Parse rate limit string like '10/60s' or '10/60s:5' into RateLimit object."""
-        # Pattern supports optional burst allowance: '10/60s' or '10/60s:5'
-        pattern = r'^(\d+)/(\d+)s(?::(\d+))?$'
+        """Parse rate limit string like '10/60s', '10/5m', '4000/3h' or '10/60s:5' into RateLimit object."""
+        # Pattern supports optional burst allowance and time units (s/m/h): '10/60s', '10/5m', '4000/3h', or '10/60s:5'
+        pattern = r'^(\d+)/(\d+)([smh])(?::(\d+))?$'
         match = re.match(pattern, rate_string)
         if not match:
-            raise ValueError(f"Invalid rate limit format: {rate_string}. Expected format: '10/60s' or '10/60s:5'")
+            raise ValueError(f"Invalid rate limit format: {rate_string}. Expected format: '10/60s', '10/5m', '4000/3h', or '10/60s:5'")
 
         requests = int(match.group(1))
-        period = int(match.group(2))
-        burst_allowance = int(match.group(3)) if match.group(3) else 1
-        return cls(requests=requests, period_seconds=period, burst_allowance=burst_allowance)
+        period_value = int(match.group(2))
+        time_unit = match.group(3)
+        burst_allowance = int(match.group(4)) if match.group(4) else 1
+
+        # Validate values
+        if requests <= 0:
+            raise ValueError(f"Requests must be positive, got: {requests}")
+        if period_value <= 0:
+            raise ValueError(f"Period must be positive, got: {period_value}")
+        if burst_allowance <= 0:
+            raise ValueError(f"Burst allowance must be positive, got: {burst_allowance}")
+
+        # Convert time period to seconds
+        if time_unit == 's':
+            period_seconds = period_value
+        elif time_unit == 'm':
+            period_seconds = period_value * 60
+        elif time_unit == 'h':
+            period_seconds = period_value * 3600
+
+        return cls(requests=requests, period_seconds=period_seconds, burst_allowance=burst_allowance)
 
     def __str__(self) -> str:
-        if self.burst_allowance == 1:
-            return f"{self.requests}/{self.period_seconds}s"
+        # Choose the most appropriate time unit for display
+        if self.period_seconds % 3600 == 0:
+            # Use hours if evenly divisible by 3600
+            period_value = self.period_seconds // 3600
+            time_unit = 'h'
+        elif self.period_seconds % 60 == 0:
+            # Use minutes if evenly divisible by 60
+            period_value = self.period_seconds // 60
+            time_unit = 'm'
         else:
-            return f"{self.requests}/{self.period_seconds}s:{self.burst_allowance}"
+            # Use seconds
+            period_value = self.period_seconds
+            time_unit = 's'
+
+        if self.burst_allowance == 1:
+            return f"{self.requests}/{period_value}{time_unit}"
+        else:
+            return f"{self.requests}/{period_value}{time_unit}:{self.burst_allowance}"
 
 
 class TokenBucketRateLimiter:

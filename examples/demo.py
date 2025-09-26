@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Comprehensive demo of the rate limiting system.
 This script demonstrates creating queues, submitting tasks, and monitoring.

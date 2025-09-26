@@ -20,77 +20,68 @@ A robust Redis-based rate-limiting system for processing tasks with strict rate 
 
 ## Installation
 
-1. Clone the repository:
-```bash
-git clone <repository-url>
-cd rate-limit-tests
-```
+1. Install dependencies:
 
-2. Install dependencies:
-```bash
-uv sync
-```
+   ```bash
+   uv sync
+   ```
 
-3. Start Redis server:
-```bash
-# On macOS with Homebrew
-brew services start redis
+2. Start Redis server:
 
-# On Linux
-sudo systemctl start redis
-
-# Or run manually
-redis-server
-```
+   ```bash
+   docker run -p 6379:6379 -d redis
+   ```
 
 ## Quick Start
 
-### 1. Run the Demo
+### 1. Start the worker(s)
 
-First, test the system with the built-in demo:
+You can run as many of these as you want, but for development start with one, maybe bump the concurrency to 2 or 4.
 
 ```bash
-python examples/demo.py
+uv run celery -A src.tasks worker --loglevel=info --without-mingle --without-gossip --concurrency=1
+
+# or
+
+uv run scripts/run_worker.py
 ```
 
-This will demonstrate:
-- Creating queues with different rate limits
-- Submitting tasks
-- Rate limiting behavior
-- Queue management operations
+### 2. Start the dispatcher
 
-### 2. Start the System Components
+Can run as many as needed, but for development start with one.
 
-Open 4 terminal windows:
-
-**Terminal 1 - Start Celery Worker:**
 ```bash
-python scripts/run_worker.py
+uv run scripts/run_dispatcher.py
 ```
 
-**Terminal 2 - Start Task Dispatcher:**
+### 3. Start the Monitor (optional)
+
 ```bash
-python scripts/run_dispatcher.py
+uv run scripts/monitor.py
 ```
 
-**Terminal 3 - Start Monitoring:**
+### 4. Run the demo
+
 ```bash
-python scripts/monitor.py
+uv run examples/demo_simple.py
+# or
+uv run examples/demo.py
 ```
 
-**Terminal 4 - Queue Management:**
+**Manual Queue Management:**
+
 ```bash
 # Create a queue (5 tasks per 60 seconds)
-python scripts/queue_manager_cli.py create "5/60s"
+uv run scripts/queue_manager_cli.py create "5/60s"
 
 # List queues
-python scripts/queue_manager_cli.py list
+uv run scripts/queue_manager_cli.py list
 
 # Submit test tasks
-python scripts/queue_manager_cli.py test <queue_name> 10
+uv run scripts/queue_manager_cli.py test <queue_name> 10
 
 # Show queue details
-python scripts/queue_manager_cli.py show <queue_name>
+uv run scripts/queue_manager_cli.py show <queue_name>
 ```
 
 ## System Architecture
@@ -125,6 +116,7 @@ python scripts/queue_manager_cli.py show <queue_name>
 ### Rate Limit Format
 
 Rate limits are specified as `"requests/period_seconds"`:
+
 - `"10/60s"` = 10 requests per 60 seconds
 - `"1/3600s"` = 1 request per hour
 - `"100/10s"` = 100 requests per 10 seconds
@@ -139,34 +131,34 @@ Queues are automatically named as `batch_{uuid4}` where uuid4 is a random UUID.
 
 ```bash
 # Create different types of queues
-python scripts/queue_manager_cli.py create "10/60s"    # Medium rate
-python scripts/queue_manager_cli.py create "1/300s"    # Very slow (1 per 5 min)
-python scripts/queue_manager_cli.py create "50/10s"    # Fast rate
+uv run scripts/queue_manager_cli.py create "10/60s"    # Medium rate
+uv run scripts/queue_manager_cli.py create "1/300s"    # Very slow (1 per 5 min)
+uv run scripts/queue_manager_cli.py create "50/10s"    # Fast rate
 
 # List all queues
-python scripts/queue_manager_cli.py list
+uv run scripts/queue_manager_cli.py list
 
 # Update rate limit
-python scripts/queue_manager_cli.py update batch_xxx "20/60s"
+uv run scripts/queue_manager_cli.py update batch_xxx "20/60s"
 
 # Deactivate queue (stops processing but keeps data)
-python scripts/queue_manager_cli.py deactivate batch_xxx
+uv run scripts/queue_manager_cli.py deactivate batch_xxx
 
 # Remove queue completely
-python scripts/queue_manager_cli.py remove batch_xxx
+uv run scripts/queue_manager_cli.py remove batch_xxx
 ```
 
 ### Monitoring
 
 ```bash
 # Continuous monitoring (updates every 2 seconds)
-python scripts/monitor.py
+uv run scripts/monitor.py
 
 # Single report
-python scripts/monitor.py --once
+uv run scripts/monitor.py --once
 
 # Custom update interval
-python scripts/monitor.py 5.0  # Update every 5 seconds
+uv run scripts/monitor.py 5.0  # Update every 5 seconds
 ```
 
 ### Programmatic Usage
@@ -198,6 +190,7 @@ rate_status = queue_manager.get_rate_limit_status(queue_name)
 ### Celery Configuration
 
 The system is configured for strict rate limiting:
+
 - `worker_prefetch_multiplier=1`: Workers take one task at a time
 - `task_acks_late=True`: Tasks acknowledged after completion
 - `worker_concurrency=1`: Single worker process
@@ -207,6 +200,7 @@ The system is configured for strict rate limiting:
 Default connection: `localhost:6379/0`
 
 Modify in source files if needed:
+
 ```python
 redis_client = redis.Redis(host='localhost', port=6379, db=0)
 ```
@@ -216,23 +210,27 @@ redis_client = redis.Redis(host='localhost', port=6379, db=0)
 The monitoring system displays:
 
 ### Queue Statistics
+
 - Queue name and rate limit
 - Active/inactive status
 - Tasks waiting, processing, completed, failed
 - Creation timestamp
 
 ### Rate Limit Status
+
 - Available tokens vs capacity
 - Token refill rate
 - Next token availability time
 
 ### System Overview
+
 - Total and active queue counts
 - Redis connection status
 
 ## Error Handling
 
 The system handles:
+
 - Redis connection failures (fails open)
 - Worker crashes (tasks return to queue)
 - Invalid rate limit formats
@@ -252,7 +250,7 @@ The system handles:
 
 ```bash
 # Run basic functionality test
-python examples/demo.py
+uv run examples/demo.py
 ```
 
 ### Adding New Features
@@ -264,30 +262,21 @@ python examples/demo.py
 
 ## Troubleshooting
 
-### Redis Connection Issues
-```bash
-# Check if Redis is running
-redis-cli ping
-
-# Should return "PONG"
-```
-
 ### Worker Not Processing Tasks
+
 1. Check Celery worker logs
 2. Verify Redis connection
 3. Ensure dispatcher is running
 4. Check queue active status
 
 ### Rate Limiting Not Working
+
 1. Verify Lua script registration
 2. Check Redis for rate limit keys: `redis-cli KEYS "rate_limit:*"`
 3. Monitor token bucket status in monitoring output
 
 ### High Memory Usage
+
 - Queues auto-expire after 1 hour of inactivity
 - Clean up completed/failed task data periodically
 - Monitor Redis memory: `redis-cli INFO memory`
-
-## License
-
-[Add your license here]

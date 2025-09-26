@@ -108,8 +108,7 @@ class RateLimitedTaskSubmitter:
         if can_process:
             # Submit task immediately
             process_rate_limited_task.apply_async(
-                args=[queue_name, task_data],
-                queue=queue_name
+                args=[queue_name, task_data]
             )
             logger.info(f"Task submitted to {queue_name} for immediate processing")
             return True
@@ -149,6 +148,7 @@ class RateLimitedTaskDispatcher:
         """Check all active queues and dispatch pending tasks when tokens are available."""
         active_queues = self.queue_manager.get_active_queues()
         dispatched_count = 0
+        next_check_times = {}
 
         for queue_config in active_queues:
             queue_name = queue_config.name
@@ -171,8 +171,7 @@ class RateLimitedTaskDispatcher:
 
                         # Submit task for processing
                         process_rate_limited_task.apply_async(
-                            args=[queue_name, task_data],
-                            queue=queue_name
+                            args=[queue_name, task_data]
                         )
 
                         dispatched_count += 1
@@ -181,19 +180,38 @@ class RateLimitedTaskDispatcher:
                     except json.JSONDecodeError as e:
                         logger.error(f"Failed to decode task payload from {queue_name}: {e}")
                         queue_manager.increment_stat(queue_name, "tasks_failed", 1)
+            else:
+                # Store when this queue should be checked again
+                if wait_time > 0:
+                    next_check_times[queue_name] = time.time() + wait_time
 
-        return dispatched_count
+        return dispatched_count, next_check_times
 
-    def run_dispatcher(self, interval: float = 0.1):
-        """Run the dispatcher in a loop."""
-        logger.info(f"Starting task dispatcher with {interval}s interval")
+    def run_dispatcher(self, interval: float = 0.5):
+        """Run the dispatcher in a loop with adaptive timing."""
+        logger.info(f"Starting task dispatcher with base {interval}s interval")
 
         while True:
             try:
-                dispatched = self.dispatch_pending_tasks()
+                dispatched, next_check_times = self.dispatch_pending_tasks()
                 if dispatched > 0:
-                    logger.debug(f"Dispatched {dispatched} tasks")
-                time.sleep(interval)
+                    logger.info(f"Dispatched {dispatched} tasks")
+
+                # Calculate sleep time - use shorter interval if tasks were dispatched
+                # or if any queue will have tokens available soon
+                sleep_time = interval
+                if next_check_times:
+                    current_time = time.time()
+                    min_wait_time = min(check_time - current_time for check_time in next_check_times.values())
+                    if min_wait_time > 0:
+                        # Sleep until the soonest token becomes available, but cap at interval
+                        sleep_time = min(interval, min_wait_time)
+
+                if dispatched > 0:
+                    sleep_time = min(sleep_time, 0.1)  # Check quickly after success
+
+                time.sleep(sleep_time)
+
             except KeyboardInterrupt:
                 logger.info("Dispatcher stopped by user")
                 break

@@ -51,7 +51,7 @@ class TokenBucketRateLimiter:
 
         -- Calculate tokens to add based on time elapsed
         local time_elapsed = current_time - last_refill
-        local tokens_to_add = math.floor(time_elapsed * refill_rate)
+        local tokens_to_add = time_elapsed * refill_rate
 
         -- Update tokens (capped at capacity)
         tokens = math.min(capacity, tokens + tokens_to_add)
@@ -89,7 +89,7 @@ class TokenBucketRateLimiter:
 
         -- Calculate tokens to add based on time elapsed
         local time_elapsed = current_time - last_refill
-        local tokens_to_add = math.floor(time_elapsed * refill_rate)
+        local tokens_to_add = time_elapsed * refill_rate
 
         -- Update tokens (capped at capacity)
         tokens = math.min(capacity, tokens + tokens_to_add)

@@ -11,6 +11,7 @@ A robust Redis-based rate-limiting system for processing tasks with strict rate 
 - **Resilient Design**: Handles Redis failures, worker crashes, and system restarts gracefully
 - **Efficient Worker Usage**: Workers only pull tasks they can process immediately
 - **Flexible Rate Limits**: Support for very fast to very slow queues (e.g., 1 task per hour)
+- **Multiple Time Units**: Support for seconds (s), minutes (m), and hours (h) in rate limit specifications
 
 ## Prerequisites
 
@@ -71,8 +72,8 @@ uv run examples/demo.py
 **Manual Queue Management:**
 
 ```bash
-# Create a queue (5 tasks per 60 seconds)
-uv run scripts/queue_manager_cli.py create "5/60s"
+# Create a queue (5 tasks per minute)
+uv run scripts/queue_manager_cli.py create "5/1m"
 
 # List queues
 uv run scripts/queue_manager_cli.py list
@@ -115,16 +116,26 @@ uv run scripts/queue_manager_cli.py show <queue_name>
 
 ### Rate Limit Format
 
-Rate limits are specified as `"requests/period_seconds"` with optional burst allowance:
+Rate limits are specified as `"requests/period"` with support for multiple time units and optional burst allowance:
+
+#### Time Units Supported
+
+- **Seconds**: `s` (e.g., `"10/60s"`)
+- **Minutes**: `m` (e.g., `"10/5m"`)
+- **Hours**: `h` (e.g., `"4000/3h"`)
 
 #### Smooth Rate Limiting (Default)
+
 - `"10/60s"` = 10 requests per 60 seconds, evenly distributed (1 every 6s)
-- `"1/3600s"` = 1 request per hour
-- `"100/10s"` = 100 requests per 10 seconds, evenly distributed (1 every 0.1s)
+- `"10/5m"` = 10 requests per 5 minutes, evenly distributed (1 every 30s)
+- `"4000/3h"` = 4000 requests per 3 hours, evenly distributed (1 every 2.7s)
+- `"100/1h"` = 100 requests per hour, evenly distributed (1 every 36s)
+- `"1/1h"` = 1 request per hour
 
 #### Burst Rate Limiting (Optional)
+
 - `"10/60s:5"` = 10 requests per 60 seconds with up to 5 token burst allowance
-- `"10/60s:10"` = 10 requests per 60 seconds with full burst capacity (original behavior)
+- `"4000/3h:50"` = 4000 requests per 3 hours with up to 50 token burst allowance
 
 **Default behavior**: All rate limits use smooth distribution (burst_allowance=1) to prevent bursting and ensure even request spacing over time.
 
@@ -138,9 +149,11 @@ Queues are automatically named as `batch_{uuid4}` where uuid4 is a random UUID.
 
 ```bash
 # Create different types of queues
-uv run scripts/queue_manager_cli.py create "10/60s"    # Medium rate (smooth)
-uv run scripts/queue_manager_cli.py create "1/300s"    # Very slow (1 per 5 min)
+uv run scripts/queue_manager_cli.py create "10/1m"     # Medium rate (smooth)
+uv run scripts/queue_manager_cli.py create "1/5m"      # Very slow (1 per 5 min)
 uv run scripts/queue_manager_cli.py create "50/10s"    # Fast rate (smooth)
+uv run scripts/queue_manager_cli.py create "4000/3h"   # Large batch over 3 hours
+uv run scripts/queue_manager_cli.py create "100/1h"    # Hourly processing
 uv run scripts/queue_manager_cli.py create "10/60s:5"  # Medium rate with burst allowance
 
 # List all queues
@@ -182,7 +195,7 @@ queue_manager = UniversalQueueManager(redis_client)
 submitter = RateLimitedTaskSubmitter()
 
 # Create queue
-queue_name = queue_manager.create_queue("5/60s")
+queue_name = queue_manager.create_queue("5/1m")
 
 # Submit tasks
 task_data = {"message": "Hello, world!", "priority": 1}
@@ -259,6 +272,9 @@ The system handles:
 ```bash
 # Run basic functionality test
 uv run examples/demo.py
+
+# Run rate limiter unit tests
+uv run pytest test_rate_limiter.py -v
 ```
 
 ### Adding New Features

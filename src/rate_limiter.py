@@ -11,21 +11,27 @@ import re
 class RateLimit(BaseModel):
     requests: int
     period_seconds: int
+    burst_allowance: int = 1
 
     @classmethod
     def from_string(cls, rate_string: str) -> "RateLimit":
-        """Parse rate limit string like '10/60s' into RateLimit object."""
-        pattern = r'^(\d+)/(\d+)s$'
+        """Parse rate limit string like '10/60s' or '10/60s:5' into RateLimit object."""
+        # Pattern supports optional burst allowance: '10/60s' or '10/60s:5'
+        pattern = r'^(\d+)/(\d+)s(?::(\d+))?$'
         match = re.match(pattern, rate_string)
         if not match:
-            raise ValueError(f"Invalid rate limit format: {rate_string}. Expected format: '10/60s'")
+            raise ValueError(f"Invalid rate limit format: {rate_string}. Expected format: '10/60s' or '10/60s:5'")
 
         requests = int(match.group(1))
         period = int(match.group(2))
-        return cls(requests=requests, period_seconds=period)
+        burst_allowance = int(match.group(3)) if match.group(3) else 1
+        return cls(requests=requests, period_seconds=period, burst_allowance=burst_allowance)
 
     def __str__(self) -> str:
-        return f"{self.requests}/{self.period_seconds}s"
+        if self.burst_allowance == 1:
+            return f"{self.requests}/{self.period_seconds}s"
+        else:
+            return f"{self.requests}/{self.period_seconds}s:{self.burst_allowance}"
 
 
 class TokenBucketRateLimiter:
@@ -122,7 +128,7 @@ class TokenBucketRateLimiter:
         try:
             result = self._acquire_script(
                 keys=[bucket_key],
-                args=[rate_limit.requests, refill_rate, current_time]
+                args=[rate_limit.burst_allowance, refill_rate, current_time]
             )
             success, remaining_tokens, wait_time = result
 
@@ -147,13 +153,13 @@ class TokenBucketRateLimiter:
         try:
             result = self._status_script(
                 keys=[bucket_key],
-                args=[rate_limit.requests, refill_rate, current_time]
+                args=[rate_limit.burst_allowance, refill_rate, current_time]
             )
             available_tokens, next_token_time = result
 
             return {
                 "available_tokens": float(available_tokens),
-                "capacity": float(rate_limit.requests),
+                "capacity": float(rate_limit.burst_allowance),
                 "refill_rate": refill_rate,
                 "next_token_at": float(next_token_time) if next_token_time > 0 else None,
                 "next_token_in": max(0, float(next_token_time) - current_time) if next_token_time > 0 else 0
@@ -163,7 +169,7 @@ class TokenBucketRateLimiter:
             logger.error(f"Redis error getting status for {queue_name}: {e}")
             return {
                 "available_tokens": 0.0,
-                "capacity": float(rate_limit.requests),
+                "capacity": float(rate_limit.burst_allowance),
                 "refill_rate": refill_rate,
                 "next_token_at": None,
                 "next_token_in": 0.0

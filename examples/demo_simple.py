@@ -28,7 +28,7 @@ def demo_basic_functionality():
     # Create test queues with different rate limits
     print("\n1. Creating test queues...")
 
-    queue = queue_manager.create_queue("1/1s")  # 10 tasks per 10 seconds
+    queue = queue_manager.create_queue("10/10s:5")  # 10 tasks per 10 seconds
     print(f"\tQueue: {queue}")
 
     # Submit some test tasks

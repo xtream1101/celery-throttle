@@ -5,7 +5,7 @@ A robust Redis-based rate-limiting system for processing tasks with strict rate 
 ## Features
 
 - **Dynamic Queue Creation**: Create queues on-the-fly with unique names (`batch_{uuid}`)
-- **Strict Rate Limiting**: No bursting - enforces rate limits precisely using token bucket algorithm
+- **Smooth Rate Limiting**: Even distribution by default - prevents bursting and ensures consistent request spacing
 - **Atomic Operations**: Redis Lua scripts ensure thread-safe rate limiting
 - **Real-time Monitoring**: Live monitoring of queue statistics and rate limit status
 - **Resilient Design**: Handles Redis failures, worker crashes, and system restarts gracefully
@@ -115,11 +115,18 @@ uv run scripts/queue_manager_cli.py show <queue_name>
 
 ### Rate Limit Format
 
-Rate limits are specified as `"requests/period_seconds"`:
+Rate limits are specified as `"requests/period_seconds"` with optional burst allowance:
 
-- `"10/60s"` = 10 requests per 60 seconds
+#### Smooth Rate Limiting (Default)
+- `"10/60s"` = 10 requests per 60 seconds, evenly distributed (1 every 6s)
 - `"1/3600s"` = 1 request per hour
-- `"100/10s"` = 100 requests per 10 seconds
+- `"100/10s"` = 100 requests per 10 seconds, evenly distributed (1 every 0.1s)
+
+#### Burst Rate Limiting (Optional)
+- `"10/60s:5"` = 10 requests per 60 seconds with up to 5 token burst allowance
+- `"10/60s:10"` = 10 requests per 60 seconds with full burst capacity (original behavior)
+
+**Default behavior**: All rate limits use smooth distribution (burst_allowance=1) to prevent bursting and ensure even request spacing over time.
 
 ### Queue Naming
 
@@ -131,9 +138,10 @@ Queues are automatically named as `batch_{uuid4}` where uuid4 is a random UUID.
 
 ```bash
 # Create different types of queues
-uv run scripts/queue_manager_cli.py create "10/60s"    # Medium rate
+uv run scripts/queue_manager_cli.py create "10/60s"    # Medium rate (smooth)
 uv run scripts/queue_manager_cli.py create "1/300s"    # Very slow (1 per 5 min)
-uv run scripts/queue_manager_cli.py create "50/10s"    # Fast rate
+uv run scripts/queue_manager_cli.py create "50/10s"    # Fast rate (smooth)
+uv run scripts/queue_manager_cli.py create "10/60s:5"  # Medium rate with burst allowance
 
 # List all queues
 uv run scripts/queue_manager_cli.py list

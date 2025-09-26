@@ -8,4 +8,7 @@ dependencies = [
     "celery>=5.5.3",
     "kombu>=5.5.4",
     "loguru>=0.7.3",
+    "pydantic>=2.11.9",
+    "python-dateutil>=2.9.0.post0",
+    "redis>=6.4.0",
 ]

@@ -52,9 +52,27 @@ class UniversalQueueRouter:
             )
             self.registry.register_queue(default_config)
 
-        # Calculate optimal execution time
-        next_execution_time = self.registry.calculate_next_execution_time(logical_queue_name)
+        # Calculate optimal execution time with strict rate limiting
+        config = self.registry.get_config(logical_queue_name)
+        if not config:
+            raise ValueError(f"Queue {logical_queue_name} not found")
+
         current_time = time.time()
+
+        # Get the current state to determine the actual next execution time
+        state = self.registry.get_state(logical_queue_name)
+
+        # Calculate strict next execution time
+        if state and state.last_execution:
+            # Ensure we wait the FULL rate limit interval
+            next_execution_time = state.last_execution + config.refill_frequency
+            # If that time has already passed, use current time + minimum interval
+            if next_execution_time <= current_time:
+                next_execution_time = current_time + config.refill_frequency
+        else:
+            # First task can execute now, but set up timing for next ones
+            next_execution_time = current_time
+
         delay = max(0, next_execution_time - current_time)
 
         # Wrap the original task args with routing metadata
@@ -64,7 +82,8 @@ class UniversalQueueRouter:
             'scheduled_time': next_execution_time,
             'routing_metadata': {
                 'dispatch_time': current_time,
-                'calculated_delay': delay
+                'calculated_delay': delay,
+                'rate_interval': config.refill_frequency
             }
         }]
 
@@ -75,17 +94,17 @@ class UniversalQueueRouter:
             **kwargs
         }
 
-        # Schedule with ETA if there's significant delay
-        if delay > 0.1:
+        # ALWAYS use ETA for strict rate limiting (even small delays)
+        if delay > 0.01:  # Use ETA for any meaningful delay
             from datetime import datetime
             eta = datetime.fromtimestamp(next_execution_time)
             dispatch_kwargs['eta'] = eta
-            logger.debug(f"Scheduling task for logical queue '{logical_queue_name}' "
-                        f"at {eta.strftime('%H:%M:%S.%f')[:-3]} (delay: {delay:.3f}s)")
+            logger.info(f"⏰ Scheduling task for logical queue '{logical_queue_name}' "
+                       f"at {eta.strftime('%H:%M:%S')} (strict delay: {delay:.3f}s)")
         else:
-            logger.debug(f"Dispatching task for logical queue '{logical_queue_name}' immediately")
+            logger.info(f"▶️  Dispatching task for logical queue '{logical_queue_name}' immediately")
 
-        # Record the intended execution time
+        # Record the intended execution time BEFORE dispatching
         self.registry.record_execution(logical_queue_name, next_execution_time)
 
         # Dispatch to universal queue with wrapped args
@@ -191,14 +210,24 @@ def create_universal_task(celery_app: Celery, redis_conn: Redis):
         # Get registry for execution recording
         registry = RateLimitRegistry(redis_conn)
 
-        # Check if we're on schedule
-        actual_delay = registry.get_delay_until_ready(logical_queue)
-        if actual_delay > 0.01:
-            logger.warning(f"Task for logical queue '{logical_queue}' "
-                          f"has unexpected delay: {actual_delay:.3f}s")
+        # STRICT rate limiting enforcement - ensure we don't execute too early
+        config = registry.get_config(logical_queue)
+        if config:
+            state = registry.get_state(logical_queue)
+            if state and state.last_execution:
+                time_since_last = time.time() - state.last_execution
+                required_interval = config.refill_frequency
 
-        # Execute the task (no blocking needed since it's pre-scheduled)
+                if time_since_last < required_interval:
+                    # We're executing too early! Sleep until the proper time
+                    sleep_time = required_interval - time_since_last
+                    logger.warning(f"🚨 STRICT RATE LIMIT: Task for '{logical_queue}' arrived {sleep_time:.3f}s too early")
+                    logger.info(f"⏳ Sleeping {sleep_time:.3f}s to enforce strict rate limit...")
+                    time.sleep(sleep_time)
+
+        # Execute the task
         execution_time = time.time()
+        logger.info(f"🔥 EXECUTING task for '{logical_queue}' at {execution_time:.3f}")
 
         # Record execution
         registry.record_execution(logical_queue, execution_time)

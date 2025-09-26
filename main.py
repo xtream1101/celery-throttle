@@ -140,7 +140,6 @@ def test_performance_monitoring():
 
     # Manually record a few completions
     import time
-    current_time = time.time()
 
     performance_monitor.record_task_completion(test_queue, 2.5)
     time.sleep(0.1)

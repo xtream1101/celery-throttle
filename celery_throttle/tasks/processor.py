@@ -13,15 +13,16 @@ from ..queue.manager import UniversalQueueManager
 class RateLimitedTaskProcessor:
     """Handles task processing with rate limiting integration."""
 
-    def __init__(self, celery_app: Celery, redis_client: redis.Redis, queue_manager: UniversalQueueManager):
+    def __init__(self, celery_app: Celery, redis_client: redis.Redis, queue_manager: UniversalQueueManager, target_queue: str = "rate_limited_tasks"):
         self.app = celery_app
         self.redis = redis_client
         self.queue_manager = queue_manager
+        self.target_queue = target_queue
         self._register_task()
 
     def _register_task(self):
         """Register the rate-limited task with the Celery app."""
-        @self.app.task(bind=True)
+        @self.app.task(bind=True, queue=self.target_queue)
         def process_rate_limited_task(task_self, queue_name: str, task_data: Dict[str, Any]):
             """
             Process a task with rate limiting.
@@ -33,7 +34,7 @@ class RateLimitedTaskProcessor:
             logger.info(f"Starting task {task_id} for queue {queue_name}")
 
             # Mark task as processing
-            processing_key = f"processing:{queue_name}"
+            processing_key = f"{self.queue_manager.queue_prefix}:processing:{queue_name}"
             self.redis.sadd(processing_key, task_id)
 
             # Update stats
@@ -101,13 +102,14 @@ class RateLimitedTaskSubmitter:
         if can_process:
             # Submit task immediately
             self.task_processor.process_rate_limited_task.apply_async(
-                args=[queue_name, task_data]
+                args=[queue_name, task_data],
+                queue=self.task_processor.target_queue
             )
             logger.info(f"Task submitted to {queue_name} for immediate processing")
             return True
         else:
             # Add to pending queue
-            task_queue_key = f"queue:{queue_name}"
+            task_queue_key = f"{self.queue_manager.queue_prefix}:queue:{queue_name}"
             task_payload = {
                 "data": task_data,
                 "submitted_at": datetime.now().isoformat(),
@@ -147,7 +149,7 @@ class RateLimitedTaskDispatcher:
 
         for queue_config in active_queues:
             queue_name = queue_config.name
-            task_queue_key = f"queue:{queue_name}"
+            task_queue_key = f"{self.queue_manager.queue_prefix}:queue:{queue_name}"
 
             # Check if there are pending tasks
             if self.redis.llen(task_queue_key) == 0:
@@ -166,7 +168,8 @@ class RateLimitedTaskDispatcher:
 
                         # Submit task for processing
                         self.task_processor.process_rate_limited_task.apply_async(
-                            args=[queue_name, task_data]
+                            args=[queue_name, task_data],
+                            queue=self.task_processor.target_queue
                         )
 
                         dispatched_count += 1

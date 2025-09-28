@@ -36,11 +36,12 @@ class QueueStats(BaseModel):
 class UniversalQueueManager:
     """Manages dynamic queues with individual rate limiting."""
 
-    def __init__(self, redis_client: redis.Redis):
+    def __init__(self, redis_client: redis.Redis, queue_prefix: str = "throttle"):
         self.redis = redis_client
         self.rate_limiter = TokenBucketRateLimiter(redis_client)
-        self._queues_key = "queues:config"
-        self._stats_key_prefix = "queues:stats"
+        self.queue_prefix = queue_prefix
+        self._queues_key = f"{queue_prefix}:queues:config"
+        self._stats_key_prefix = f"{queue_prefix}:queues:stats"
 
     def create_queue(self, rate_limit_str: str) -> str:
         """Create a new dynamic queue with specified rate limit."""
@@ -83,12 +84,12 @@ class UniversalQueueManager:
         self.redis.delete(stats_key)
 
         # Remove rate limit bucket
-        bucket_key = f"rate_limit:{queue_name}"
+        bucket_key = f"{self.queue_prefix}:rate_limit:{queue_name}"
         self.redis.delete(bucket_key)
 
         # Remove task queues (pending tasks)
-        task_queue_key = f"queue:{queue_name}"
-        processing_key = f"processing:{queue_name}"
+        task_queue_key = f"{self.queue_prefix}:queue:{queue_name}"
+        processing_key = f"{self.queue_prefix}:processing:{queue_name}"
         self.redis.delete(task_queue_key, processing_key)
 
         logger.info(f"Removed queue {queue_name}")
@@ -195,8 +196,8 @@ class UniversalQueueManager:
             stats_data = self.redis.hgetall(stats_key)
 
         # Also get current queue lengths
-        task_queue_key = f"queue:{queue_name}"
-        processing_key = f"processing:{queue_name}"
+        task_queue_key = f"{self.queue_prefix}:queue:{queue_name}"
+        processing_key = f"{self.queue_prefix}:processing:{queue_name}"
 
         tasks_waiting = self.redis.llen(task_queue_key)
         tasks_processing = self.redis.scard(processing_key)
@@ -223,7 +224,9 @@ class UniversalQueueManager:
         if not queue_config or not queue_config.active:
             return False, 0.0
 
-        return self.rate_limiter.try_acquire(queue_name, queue_config.rate_limit)
+        # Use prefixed bucket key for rate limiting
+        bucket_key = f"{self.queue_prefix}:rate_limit:{queue_name}"
+        return self.rate_limiter.try_acquire(bucket_key, queue_config.rate_limit)
 
     def get_rate_limit_status(self, queue_name: str) -> Optional[Dict[str, Any]]:
         """Get current rate limit status for a queue."""
@@ -231,4 +234,6 @@ class UniversalQueueManager:
         if not queue_config:
             return None
 
-        return self.rate_limiter.get_status(queue_name, queue_config.rate_limit)
+        # Use prefixed bucket key for rate limiting
+        bucket_key = f"{self.queue_prefix}:rate_limit:{queue_name}"
+        return self.rate_limiter.get_status(bucket_key, queue_config.rate_limit)

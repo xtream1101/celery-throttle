@@ -58,6 +58,8 @@ class CeleryThrottleConfig(BaseModel):
     redis: RedisConfig = Field(default_factory=RedisConfig)
     celery: CeleryConfig = Field(default_factory=CeleryConfig)
     app_name: str = "celery-throttle"
+    target_queue: str = "rate_limited_tasks"  # Celery queue for rate-limited tasks
+    queue_prefix: str = "throttle"  # Redis key prefix for isolation
 
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> "CeleryThrottleConfig":
@@ -100,5 +102,13 @@ class CeleryThrottleConfig(BaseModel):
         # App name
         if f"{prefix}APP_NAME" in os.environ:
             config_dict["app_name"] = os.environ[f"{prefix}APP_NAME"]
+
+        # Target queue
+        if f"{prefix}TARGET_QUEUE" in os.environ:
+            config_dict["target_queue"] = os.environ[f"{prefix}TARGET_QUEUE"]
+
+        # Queue prefix
+        if f"{prefix}QUEUE_PREFIX" in os.environ:
+            config_dict["queue_prefix"] = os.environ[f"{prefix}QUEUE_PREFIX"]
 
         return cls.from_dict(config_dict)

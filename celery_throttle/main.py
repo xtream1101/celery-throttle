@@ -1,4 +1,4 @@
-from typing import Optional, Union, Dict, Any
+from typing import Optional, Union, Dict, Any, List
 import redis
 from celery import Celery
 from loguru import logger
@@ -62,8 +62,8 @@ class CeleryThrottle:
             logger.info("Using provided Celery app")
 
         # Initialize components
-        self.queue_manager = UniversalQueueManager(self.redis)
-        self.task_processor = RateLimitedTaskProcessor(self.app, self.redis, self.queue_manager)
+        self.queue_manager = UniversalQueueManager(self.redis, self.config.queue_prefix)
+        self.task_processor = RateLimitedTaskProcessor(self.app, self.redis, self.queue_manager, self.config.target_queue)
         self.task_submitter = RateLimitedTaskSubmitter(self.redis, self.queue_manager, self.task_processor)
         self.task_dispatcher = RateLimitedTaskDispatcher(self.redis, self.queue_manager, self.task_processor)
 
@@ -109,7 +109,7 @@ class CeleryThrottle:
         """Get rate limit status for a queue."""
         return self.queue_manager.get_rate_limit_status(queue_name)
 
-    def run_worker(self, **worker_kwargs):
+    def run_worker(self, queues: Optional[Union[str, List[str]]] = None, **worker_kwargs):
         """Start a Celery worker with rate limiting configuration."""
         # Default options
         defaults = {
@@ -124,6 +124,13 @@ class CeleryThrottle:
         # Build worker options list
         worker_options = ['worker']
 
+        # Add queue specification if provided
+        if queues:
+            if isinstance(queues, str):
+                worker_options.extend(['--queues', queues])
+            else:
+                worker_options.extend(['--queues', ','.join(queues)])
+
         for key, value in defaults.items():
             # Convert underscores to hyphens for CLI compatibility
             cli_key = key.replace('_', '-')
@@ -134,6 +141,11 @@ class CeleryThrottle:
 
         logger.info(f"Starting Celery worker with options: {worker_options}")
         self.app.worker_main(worker_options)
+
+    def run_dedicated_worker(self, **worker_kwargs):
+        """Start a Celery worker that only processes rate-limited tasks."""
+        logger.info(f"Starting dedicated worker for queue: {self.config.target_queue}")
+        return self.run_worker(queues=self.config.target_queue, **worker_kwargs)
 
     def run_dispatcher(self, interval: float = 0.5):
         """Start the task dispatcher."""

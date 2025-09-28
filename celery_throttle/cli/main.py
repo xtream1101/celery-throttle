@@ -18,8 +18,10 @@ from ..config import CeleryThrottleConfig
 @click.option('--redis-port', default=6379, help='Redis port')
 @click.option('--redis-db', default=0, help='Redis database')
 @click.option('--app-name', default='celery-throttle', help='Celery app name')
+@click.option('--target-queue', default='rate_limited_tasks', help='Target Celery queue for rate-limited tasks')
+@click.option('--queue-prefix', default='throttle', help='Redis key prefix for isolation')
 @click.pass_context
-def cli(ctx, config, redis_host, redis_port, redis_db, app_name):
+def cli(ctx, config, redis_host, redis_port, redis_db, app_name, target_queue, queue_prefix):
     """Celery Throttle - Advanced rate limiting and queue management for Celery workers."""
     ctx.ensure_object(dict)
 
@@ -36,7 +38,9 @@ def cli(ctx, config, redis_host, redis_port, redis_db, app_name):
                 "port": redis_port,
                 "db": redis_db
             },
-            app_name=app_name
+            app_name=app_name,
+            target_queue=target_queue,
+            queue_prefix=queue_prefix
         )
 
     ctx.obj['config'] = throttle_config
@@ -46,14 +50,40 @@ def cli(ctx, config, redis_host, redis_port, redis_db, app_name):
 @click.option('--concurrency', default=1, help='Number of worker processes')
 @click.option('--loglevel', default='info', help='Logging level')
 @click.option('--prefetch-multiplier', default=1, help='Task prefetch multiplier, keep at 1 for strict rate limiting')
+@click.option('--queues', help='Comma-separated list of queues to listen to')
 @click.pass_context
-def worker(ctx, concurrency, loglevel, prefetch_multiplier):
+def worker(ctx, concurrency, loglevel, prefetch_multiplier, queues):
     """Start a Celery worker with rate limiting."""
     config = ctx.obj['config']
     throttle = CeleryThrottle(config=config)
 
-    click.echo(f"Starting Celery worker (concurrency={concurrency}, loglevel={loglevel})")
+    queue_list = None
+    if queues:
+        queue_list = [q.strip() for q in queues.split(',')]
+        click.echo(f"Starting Celery worker (queues={queue_list}, concurrency={concurrency}, loglevel={loglevel})")
+    else:
+        click.echo(f"Starting Celery worker (all queues, concurrency={concurrency}, loglevel={loglevel})")
+
     throttle.run_worker(
+        queues=queue_list,
+        concurrency=concurrency,
+        loglevel=loglevel,
+        prefetch_multiplier=prefetch_multiplier
+    )
+
+
+@cli.command('dedicated-worker')
+@click.option('--concurrency', default=1, help='Number of worker processes')
+@click.option('--loglevel', default='info', help='Logging level')
+@click.option('--prefetch-multiplier', default=1, help='Task prefetch multiplier, keep at 1 for strict rate limiting')
+@click.pass_context
+def dedicated_worker(ctx, concurrency, loglevel, prefetch_multiplier):
+    """Start a dedicated worker that only processes rate-limited tasks."""
+    config = ctx.obj['config']
+    throttle = CeleryThrottle(config=config)
+
+    click.echo(f"Starting dedicated worker for queue '{config.target_queue}' (concurrency={concurrency}, loglevel={loglevel})")
+    throttle.run_dedicated_worker(
         concurrency=concurrency,
         loglevel=loglevel,
         prefetch_multiplier=prefetch_multiplier

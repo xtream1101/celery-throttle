@@ -408,9 +408,19 @@ class CustomTaskProcessor(RateLimitedTaskProcessor):
         self.process_rate_limited_task = process_rate_limited_task
 
 # Use custom processor
+# Option A - pass the processor class to CeleryThrottle and let the library instantiate it:
+throttle = CeleryThrottle(task_processor_cls=CustomTaskProcessor)
+
+# Option B - create the CeleryThrottle first, then instantiate a processor that reuses
+# the throttle's Celery app, Redis client and queue manager, and set it explicitly.
+# This is the safe pattern that guarantees internals match.
 throttle = CeleryThrottle()
 custom_processor = CustomTaskProcessor(throttle.app, throttle.redis, throttle.queue_manager)
-throttle.task_processor = custom_processor
+throttle.set_task_processor(custom_processor)
+
+# (Runtime replacement via `set_task_processor` is supported but not recommended in
+# most production scenarios; prefer injecting the processor at construction or
+# creating the processor against the throttle internals and then setting it.)
 ```
 
 ## 🧪 Testing

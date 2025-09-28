@@ -176,15 +176,9 @@ def main():
     # Initialize CeleryThrottle with custom processor
     throttle = CeleryThrottle(celery_app=app, redis_client=redis_client)
 
-    # Replace the default processor with our custom one
-    from celery_throttle.queue.manager import UniversalQueueManager
-    queue_manager = UniversalQueueManager(redis_client)
-    custom_processor = CustomTaskProcessor(app, redis_client, queue_manager)
-
-    # Update throttle to use custom processor
-    throttle.task_processor = custom_processor
-    throttle.task_submitter.task_processor = custom_processor
-    throttle.task_dispatcher.task_processor = custom_processor
+    # Instantiate custom processor with the throttle's queue manager and set it:
+    custom_processor = CustomTaskProcessor(app, redis_client, throttle.queue_manager)
+    throttle.set_task_processor(custom_processor)
 
     # Create different queues for different task types
     data_queue = throttle.create_queue("2/10s")    # 2 data tasks per 10 seconds

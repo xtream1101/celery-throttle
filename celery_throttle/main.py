@@ -1,4 +1,4 @@
-from typing import Optional, Union, Dict, Any, List
+from typing import Optional, Union, Dict, Any, List, Type
 import redis
 from celery import Celery
 from loguru import logger
@@ -22,6 +22,8 @@ class CeleryThrottle:
         celery_app: Optional[Celery] = None,
         redis_client: Optional[redis.Redis] = None,
         config: Optional[CeleryThrottleConfig] = None,
+        task_processor: Optional[RateLimitedTaskProcessor] = None,
+        task_processor_cls: Optional[Type[RateLimitedTaskProcessor]] = None,
         **kwargs
     ):
         """
@@ -31,6 +33,8 @@ class CeleryThrottle:
             celery_app: Existing Celery app instance. If None, creates a new one.
             redis_client: Existing Redis client. If None, creates a new one.
             config: Configuration object. If None, uses defaults or kwargs.
+            task_processor: Optional explicit task processor instance.
+            task_processor_cls: Optional task processor class, used to instantiate a processor.
             **kwargs: Additional configuration options that override config.
         """
         # Setup configuration
@@ -64,9 +68,16 @@ class CeleryThrottle:
 
         # Initialize components
         self.queue_manager = UniversalQueueManager(self.redis, self.config.queue_prefix)
-        self.task_processor = RateLimitedTaskProcessor(self.app, self.redis, self.queue_manager, self.config.target_queue)
-        self.task_submitter = RateLimitedTaskSubmitter(self.redis, self.queue_manager, self.task_processor)
-        self.task_dispatcher = RateLimitedTaskDispatcher(self.redis, self.queue_manager, self.task_processor)
+        # Determine processor instance: prefer an explicit instance, otherwise a provided class,
+        # otherwise fallback to the default RateLimitedTaskProcessor.
+        if task_processor is not None:
+            processor_instance = task_processor
+        else:
+            processor_cls = task_processor_cls or RateLimitedTaskProcessor
+            processor_instance = processor_cls(self.app, self.redis, self.queue_manager, self.config.target_queue)
+
+        # Apply the configured processor and wire submitter/dispatcher
+        self.set_task_processor(processor_instance)
         self.worker_inspector = WorkerInspector(self.app)
 
         logger.info("CeleryThrottle initialized successfully")
@@ -181,3 +192,30 @@ class CeleryThrottle:
     def is_worker_infrastructure_healthy(self) -> bool:
         """Check if worker infrastructure is healthy."""
         return self.worker_inspector.is_healthy()
+
+    def set_task_processor(self, processor: Union[RateLimitedTaskProcessor, Type[RateLimitedTaskProcessor]]):
+        """Replace or set the task processor used by this CeleryThrottle instance.
+
+        Accepts either an already-instantiated RateLimitedTaskProcessor or a processor
+        class (subclass of RateLimitedTaskProcessor) which will be instantiated using
+        the current Celery app, Redis client and queue manager.
+        """
+        # If a class is provided, instantiate it
+        if isinstance(processor, type):
+            processor = processor(self.app, self.redis, self.queue_manager, self.config.target_queue)
+
+        # At this point processor is an instance
+        self.task_processor = processor
+
+        # Ensure task_submitter / task_dispatcher exist and reference the processor
+        if hasattr(self, "task_submitter"):
+            self.task_submitter.task_processor = self.task_processor
+        else:
+            self.task_submitter = RateLimitedTaskSubmitter(self.redis, self.queue_manager, self.task_processor)
+
+        if hasattr(self, "task_dispatcher"):
+            self.task_dispatcher.task_processor = self.task_processor
+        else:
+            self.task_dispatcher = RateLimitedTaskDispatcher(self.redis, self.queue_manager, self.task_processor)
+
+        logger.info("Task processor set and submitter/dispatcher wired to new processor")

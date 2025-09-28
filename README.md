@@ -13,7 +13,7 @@ Celery Throttle provides a robust solution for processing tasks with strict rate
 - **⚡ Atomic Rate Limiting**: Redis Lua scripts ensure thread-safe, precise rate limiting
 - **👥 Dedicated Worker Pools**: Isolate rate-limited tasks with dedicated Celery workers
 - **🏷️ Queue Isolation**: Redis key prefixing enables multiple isolated setups per instance
-- **📊 Real-time Monitoring**: Live monitoring of queue statistics and rate limit status
+- **📊 Real-time Monitoring**: Live monitoring of queue statistics, rate limit status, and worker queue sizes
 - **🛡️ Resilient Design**: Handles Redis failures, worker crashes, and system restarts gracefully
 - **🎯 Efficient Workers**: Workers only pull tasks they can process immediately - no resource waste
 - **🕐 Flexible Time Units**: Support for seconds (s), minutes (m), and hours (h)
@@ -85,7 +85,11 @@ celery-throttle worker                                    # Start Celery worker 
 celery-throttle worker --queues=my_queue                  # Start worker for specific queues
 celery-throttle dedicated-worker                          # Start dedicated worker (rate-limited only)
 celery-throttle dispatcher                                # Start task dispatcher
-celery-throttle monitor                                   # Real-time monitoring
+
+# Monitoring and status
+celery-throttle monitor                                   # Real-time monitoring (queues + workers)
+celery-throttle worker-status                             # Show worker information
+celery-throttle worker-status --detailed                  # Detailed worker queue information
 
 # Configuration options
 celery-throttle --target-queue=my_queue --queue-prefix=my_app dedicated-worker
@@ -200,10 +204,19 @@ throttle = CeleryThrottle.from_config_dict(config_dict)
 ### Real-time CLI Monitor
 
 ```bash
+# Monitor queues and workers in real-time
 celery-throttle monitor
+
+# Show current worker status
+celery-throttle worker-status
+
+# Show detailed worker queue information
+celery-throttle worker-status --detailed
 ```
 
 ### Programmatic Monitoring
+
+#### Queue Statistics
 
 ```python
 # Get queue statistics
@@ -220,6 +233,29 @@ print(f"Next token in: {status['next_token_in']} seconds")
 # List all queues
 for queue in throttle.list_queues():
     print(f"{queue.name}: {queue.rate_limit} ({'active' if queue.active else 'inactive'})")
+```
+
+#### Worker Monitoring
+
+```python
+# Get worker information and queue sizes
+worker_info = throttle.get_worker_info()
+for worker_name, info in worker_info.items():
+    print(f"Worker: {worker_name}")
+    print(f"  Status: {info.status}")
+    print(f"  Active tasks: {info.active_tasks}")
+    print(f"  Reserved tasks: {info.reserved_tasks}")
+    print(f"  Queue sizes: {info.queue_sizes}")
+
+# Get worker queue summary
+queue_summary = throttle.get_worker_queue_summary()
+for queue_name, info in queue_summary.items():
+    print(f"Queue {queue_name}: {info.total_size} tasks across {len(info.workers_listening)} workers")
+
+# Check worker infrastructure health
+is_healthy = throttle.is_worker_infrastructure_healthy()
+worker_count = throttle.get_worker_count()
+print(f"Workers: {worker_count} active, Status: {'HEALTHY' if is_healthy else 'UNHEALTHY'}")
 ```
 
 ## 🏗️ Architecture
@@ -271,7 +307,7 @@ throttle.submit_task(api_queue, {"api_call": "fetch_data"})
 
 ```
 
-#### Start workers in separate terminals:
+#### Start workers in separate terminals
 
 #### Terminal 1: Regular tasks only (or use existing celery command)
 

@@ -353,6 +353,57 @@ def cleanup_empty_queues(ctx):
         click.echo("Cleanup cancelled")
 
 
+@cli.command('worker-status')
+@click.option('--detailed', '-d', is_flag=True, help='Show detailed worker queue information')
+@click.pass_context
+def worker_status(ctx, detailed):
+    """Show worker information and queue sizes."""
+    config = ctx.obj['config']
+    throttle = CeleryThrottle(config=config)
+
+    worker_info = throttle.get_worker_info()
+    worker_count = throttle.get_worker_count()
+    is_healthy = throttle.is_worker_infrastructure_healthy()
+
+    click.echo(f"Worker Infrastructure Status: {'HEALTHY' if is_healthy else 'UNHEALTHY'}")
+    click.echo(f"Active Workers: {worker_count}")
+    click.echo()
+
+    if not worker_info:
+        click.echo("No workers found or workers not responding")
+        return
+
+    click.echo(f"{'Worker Name':<30} {'Status':<8} {'Active':<8} {'Reserved':<10} {'Total Tasks':<12}")
+    click.echo("-" * 75)
+
+    for worker_name, info in worker_info.items():
+        click.echo(f"{worker_name:<30} {info.status:<8} {info.active_tasks:<8} {info.reserved_tasks:<10} {info.total_tasks:<12}")
+
+        if detailed and info.queue_sizes:
+            click.echo("  Queues:")
+            for queue_name, size in info.queue_sizes.items():
+                click.echo(f"    {queue_name}: {size} tasks")
+        elif not detailed and info.queue_sizes:
+            total_queue_tasks = sum(info.queue_sizes.values())
+            click.echo(f"  Total queued tasks: {total_queue_tasks}")
+        click.echo()
+
+    # Show queue summary
+    if detailed:
+        worker_queue_summary = throttle.get_worker_queue_summary()
+        if worker_queue_summary:
+            click.echo("Worker Queue Summary:")
+            click.echo(f"{'Queue Name':<25} {'Total Size':<12} {'Workers':<8} {'Worker Names'}")
+            click.echo("-" * 75)
+
+            for queue_name, queue_info in worker_queue_summary.items():
+                workers_text = ", ".join(queue_info.workers_listening[:2])
+                if len(queue_info.workers_listening) > 2:
+                    workers_text += f" (+{len(queue_info.workers_listening) - 2})"
+
+                click.echo(f"{queue_name[:24]:<25} {queue_info.total_size:<12} {len(queue_info.workers_listening):<8} {workers_text}")
+
+
 @cli.command()
 @click.option('--interval', default=1.0, type=float, help='Refresh interval in seconds')
 @click.pass_context
@@ -372,16 +423,23 @@ def monitor(ctx, interval):
             click.clear()
 
             # Show header
-            click.echo("=" * 80)
+            click.echo("=" * 100)
             click.echo(f"Celery Throttle Monitor - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-            click.echo("=" * 80)
+            click.echo("=" * 100)
+
+            # Show worker status
+            worker_count = throttle.get_worker_count()
+            is_healthy = throttle.is_worker_infrastructure_healthy()
+            status_text = "HEALTHY" if is_healthy else "UNHEALTHY"
+            click.echo(f"Workers: {worker_count} active | Status: {status_text}")
+            click.echo()
 
             queues = throttle.list_queues()
             if not queues:
-                click.echo("No queues found")
+                click.echo("No throttle queues found")
             else:
-                click.echo(f"\n{'Queue':<20} {'Rate Limit':<12} {'Status':<8} {'Waiting':<8} {'Processing':<10} {'Completed':<10} {'Failed':<8}")
-                click.echo("-" * 80)
+                click.echo(f"{'Throttle Queue':<20} {'Rate Limit':<12} {'Status':<8} {'Waiting':<8} {'Processing':<10} {'Completed':<10} {'Failed':<8}")
+                click.echo("-" * 100)
 
                 for queue in queues:
                     stats = throttle.get_queue_stats(queue.name)
@@ -398,6 +456,23 @@ def monitor(ctx, interval):
                     queue_name = queue.name[:19] + "..." if len(queue.name) > 22 else queue.name
                     click.echo(f"{queue_name:<20} {str(queue.rate_limit):<12} {status:<8} "
                              f"{waiting:<8} {processing:<10} {completed:<10} {failed:<8}")
+
+            # Show worker queue summary
+            try:
+                worker_queue_summary = throttle.get_worker_queue_summary()
+                if worker_queue_summary:
+                    click.echo(f"\n{'Worker Queue':<20} {'Total Size':<12} {'Workers Listening':<30}")
+                    click.echo("-" * 100)
+
+                    for queue_name, queue_info in worker_queue_summary.items():
+                        workers_text = ", ".join(queue_info.workers_listening[:3])  # Show first 3 workers
+                        if len(queue_info.workers_listening) > 3:
+                            workers_text += f" (+{len(queue_info.workers_listening) - 3} more)"
+
+                        queue_display = queue_name[:19] + "..." if len(queue_name) > 22 else queue_name
+                        click.echo(f"{queue_display:<20} {queue_info.total_size:<12} {workers_text[:29]:<30}")
+            except Exception as e:
+                click.echo(f"\nWorker queue info unavailable: {str(e)[:50]}...")
 
             click.echo(f"\nRefresh every {interval}s | Press Ctrl+C to stop")
             time.sleep(interval)

@@ -7,6 +7,7 @@ from .config import CeleryThrottleConfig, RedisConfig, CeleryConfig
 from .core.rate_limiter import TokenBucketRateLimiter
 from .queue.manager import UniversalQueueManager
 from .tasks.processor import RateLimitedTaskProcessor, RateLimitedTaskSubmitter, RateLimitedTaskDispatcher
+from .monitoring.worker_inspector import WorkerInspector
 
 
 class CeleryThrottle:
@@ -66,6 +67,7 @@ class CeleryThrottle:
         self.task_processor = RateLimitedTaskProcessor(self.app, self.redis, self.queue_manager, self.config.target_queue)
         self.task_submitter = RateLimitedTaskSubmitter(self.redis, self.queue_manager, self.task_processor)
         self.task_dispatcher = RateLimitedTaskDispatcher(self.redis, self.queue_manager, self.task_processor)
+        self.worker_inspector = WorkerInspector(self.app)
 
         logger.info("CeleryThrottle initialized successfully")
 
@@ -163,3 +165,19 @@ class CeleryThrottle:
     def deactivate_queue(self, queue_name: str) -> bool:
         """Deactivate a queue."""
         return self.queue_manager.deactivate_queue(queue_name)
+
+    def get_worker_info(self):
+        """Get information about all workers including queue sizes."""
+        return self.worker_inspector.get_worker_queue_sizes()
+
+    def get_worker_queue_summary(self):
+        """Get summary of all queues across workers."""
+        return self.worker_inspector.get_queue_summary()
+
+    def get_worker_count(self) -> int:
+        """Get the number of active workers."""
+        return self.worker_inspector.get_worker_count()
+
+    def is_worker_infrastructure_healthy(self) -> bool:
+        """Check if worker infrastructure is healthy."""
+        return self.worker_inspector.is_healthy()

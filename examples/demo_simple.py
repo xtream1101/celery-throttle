@@ -1,25 +1,14 @@
-import sys
-import os
 import time
 from datetime import datetime
-
-# Add src to path
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-
-from src.queue_manager import UniversalQueueManager
-from src.tasks import RateLimitedTaskSubmitter
-from src.rate_limiter import RateLimit
-import redis
+from celery_throttle import CeleryThrottle
 
 
 def demo_basic_functionality():
-    # Initialize components
-    redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=False)
-    queue_manager = UniversalQueueManager(redis_client)
-    task_submitter = RateLimitedTaskSubmitter()
+    # Initialize CeleryThrottle
+    throttle = CeleryThrottle()
 
     try:
-        redis_client.ping()
+        throttle.redis.ping()
         print("✓ Connected to Redis")
     except:
         print("✗ Redis connection failed - make sure Redis is running!")
@@ -28,25 +17,27 @@ def demo_basic_functionality():
     # Create test queues with different rate limits
     print("\n1. Creating test queues...")
 
-    queue = queue_manager.create_queue("10/10s:5")  # 10 tasks per 10 seconds
+    queue = throttle.create_queue("10/10s:5")  # 10 tasks per 10 seconds
     print(f"\tQueue: {queue}")
 
     # Submit some test tasks
-    print(f"\n5. Submitting test tasks to fast queue...")
+    print(f"\n2. Submitting test tasks to queue...")
     for i in range(10):
         task_data = {
             "task_number": i + 1,
             "message": f"Test task {i + 1}",
             "submitted_at": datetime.now().isoformat()
         }
-        submitted = task_submitter.submit_task(queue, task_data)
+        submitted = throttle.submit_task(queue, task_data)
         if submitted:
             print(f"\tTask {i + 1}: Submitted for immediate processing")
         else:
             print(f"\tTask {i + 1}: Queued (rate limited)")
 
-
-    print(f"  Terminal 3: python scripts/monitor.py")
+    print(f"\n3. To process tasks, run:")
+    print(f"\tTerminal 1: celery-throttle worker")
+    print(f"\tTerminal 2: celery-throttle dispatcher")
+    print(f"\tTerminal 3: celery-throttle monitor")
 
     return [queue]
 
@@ -54,12 +45,11 @@ def demo_basic_functionality():
 def cleanup_demo_queues(queue_names):
     """Clean up demo queues."""
     print(f"\nCleaning up demo queues...")
-    redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=False)
-    queue_manager = UniversalQueueManager(redis_client)
+    throttle = CeleryThrottle()
 
     for queue_name in queue_names:
-        if queue_manager.queue_exists(queue_name):
-            queue_manager.remove_queue(queue_name)
+        if throttle.queue_manager.queue_exists(queue_name):
+            throttle.remove_queue(queue_name)
             print(f"\tRemoved {queue_name}")
 
 
@@ -79,11 +69,11 @@ def main():
             else:
                 print(f"Demo queues left for inspection. Clean up manually with:")
                 for queue_name in queue_names:
-                    print(f"\tpython scripts/queue_manager_cli.py remove {queue_name}")
+                    print(f"\tcelery-throttle queue remove {queue_name}")
         except EOFError:
             print(f"\nDemo queues left for inspection. Clean up manually with:")
             for queue_name in queue_names:
-                print(f"\tpython scripts/queue_manager_cli.py remove {queue_name}")
+                print(f"\tcelery-throttle queue remove {queue_name}")
 
     except Exception as e:
         print(f"Demo failed with error: {e}")

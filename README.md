@@ -1,306 +1,343 @@
-# Advanced Celery Rate Limiting and Queue Management
+# Celery Throttle
 
-A robust Redis-based rate-limiting system for processing tasks with strict rate controls using Celery workers and token bucket algorithms.
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## Features
+**Advanced rate limiting and queue management for Celery workers using Redis-based token bucket algorithms.**
 
-- **Dynamic Queue Creation**: Create queues on-the-fly with unique names (`batch_{uuid}`)
-- **Smooth Rate Limiting**: Even distribution by default - prevents bursting and ensures consistent request spacing
-- **Atomic Operations**: Redis Lua scripts ensure thread-safe rate limiting
-- **Real-time Monitoring**: Live monitoring of queue statistics and rate limit status
-- **Resilient Design**: Handles Redis failures, worker crashes, and system restarts gracefully
-- **Efficient Worker Usage**: Workers only pull tasks they can process immediately
-- **Flexible Rate Limits**: Support for very fast to very slow queues (e.g., 1 task per hour)
-- **Multiple Time Units**: Support for seconds (s), minutes (m), and hours (h) in rate limit specifications
+Celery Throttle provides a robust solution for processing tasks with strict rate controls, ensuring efficient resource usage and compliance with API rate limits or processing constraints.
 
-## Prerequisites
+## 🚀 Features
+
+- **🔄 Dynamic Queue Creation**: Create and manage queues on-the-fly with configurable rate limits
+- **⚡ Atomic Rate Limiting**: Redis Lua scripts ensure thread-safe, precise rate limiting
+- **📊 Real-time Monitoring**: Live monitoring of queue statistics and rate limit status
+- **🛡️ Resilient Design**: Handles Redis failures, worker crashes, and system restarts gracefully
+- **🎯 Efficient Workers**: Workers only pull tasks they can process immediately - no resource waste
+- **🕐 Flexible Time Units**: Support for seconds (s), minutes (m), and hours (h)
+- **💥 Burst Control**: Optional burst allowance for handling traffic spikes
+- **📈 Smooth Distribution**: Even task distribution prevents resource bursting by default
+
+## 📦 Installation
+
+```bash
+pip install celery-throttle
+```
+
+**Requirements:**
 
 - Python 3.12+
 - Redis server
-- UV package manager
+- Celery 5.5+
 
-## Installation
+## 🏃 Quick Start
 
-1. Install dependencies:
+### Basic Usage
 
-   ```bash
-   uv sync
-   ```
+```python
+from celery_throttle import CeleryThrottle
 
-2. Start Redis server:
+# Initialize with default configuration
+throttle = CeleryThrottle()
 
-   ```bash
-   docker run -p 6379:6379 -d redis
-   ```
+# Create a rate-limited queue (5 tasks per minute)
+queue_name = throttle.create_queue("5/1m")
 
-## Quick Start
+# Submit tasks
+task_data = {"message": "Hello, world!", "user_id": 123}
+submitted = throttle.submit_task(queue_name, task_data)
 
-### 1. Start the worker(s)
-
-You can run as many of these as you want, but for development start with one, maybe bump the concurrency to 2 or 4.
-
-```bash
-uv run celery -A src.tasks worker --loglevel=info --without-mingle --without-gossip --concurrency=1
-
-# or
-
-uv run scripts/run_worker.py
+if submitted:
+    print("Task submitted for immediate processing")
+else:
+    print("Task queued due to rate limiting")
 ```
 
-### 2. Start the dispatcher
+### With Existing Celery App
 
-Can run as many as needed, but for development start with one.
+```python
+from celery import Celery
+from celery_throttle import CeleryThrottle
 
-```bash
-uv run scripts/run_dispatcher.py
+# Your existing Celery app
+app = Celery('my-app')
+app.conf.update(broker_url='redis://localhost:6379/0')
+
+# Add rate limiting to your existing app
+throttle = CeleryThrottle(celery_app=app)
+
+# Your existing tasks continue to work normally
+@app.task
+def my_existing_task(data):
+    return process_data(data)
+
+# Now you can also create rate-limited queues
+api_queue = throttle.create_queue("100/1h")  # 100 API calls per hour
 ```
 
-### 3. Start the Monitor (optional)
+### Command Line Interface
 
 ```bash
-uv run scripts/monitor.py
+# Start the system components
+celery-throttle worker      # Start Celery worker
+celery-throttle dispatcher  # Start task dispatcher
+celery-throttle monitor     # Real-time monitoring
+
+# Manage queues
+celery-throttle queue create "10/1m"           # Create queue
+celery-throttle queue list                     # List all queues
+celery-throttle queue show <queue-name>        # Show queue details
+celery-throttle queue test <queue-name> 5      # Submit 5 test tasks
 ```
 
-### 4. Run the demo
+## 📋 Rate Limit Formats
+
+### Time Units
+
+- **Seconds**: `"10/60s"` (10 requests per 60 seconds)
+- **Minutes**: `"10/5m"` (10 requests per 5 minutes)
+- **Hours**: `"4000/3h"` (4000 requests per 3 hours)
+
+### Distribution Modes
+
+#### Smooth Distribution (Default)
+
+```python
+throttle.create_queue("10/60s")   # 1 task every 6 seconds
+throttle.create_queue("100/1h")   # 1 task every 36 seconds
+throttle.create_queue("1/5m")     # 1 task every 5 minutes
+```
+
+#### Burst Allowance (Optional)
+
+```python
+throttle.create_queue("10/60s:5")   # 10/minute with up to 5 burst tokens
+throttle.create_queue("100/1h:20")  # 100/hour with up to 20 burst tokens
+```
+
+## 🔧 Configuration
+
+### Using Configuration Objects
+
+```python
+from celery_throttle import CeleryThrottle
+from celery_throttle.config import CeleryThrottleConfig, RedisConfig
+
+config = CeleryThrottleConfig(
+    app_name="my-rate-limited-app",
+    redis=RedisConfig(host="localhost", port=6379, db=1),
+    celery={
+        "broker_url": "redis://localhost:6379/1",
+        "worker_concurrency": 2
+    }
+)
+
+throttle = CeleryThrottle(config=config)
+```
+
+### Using Environment Variables
 
 ```bash
-uv run examples/demo_simple.py
-# or
-uv run examples/demo.py
+export CELERY_THROTTLE_REDIS_HOST=localhost
+export CELERY_THROTTLE_REDIS_PORT=6379
+export CELERY_THROTTLE_REDIS_DB=1
+export CELERY_THROTTLE_BROKER_URL=redis://localhost:6379/1
+export CELERY_THROTTLE_APP_NAME=my-app
 ```
 
-**Manual Queue Management:**
+```python
+throttle = CeleryThrottle.from_env()
+```
+
+### Using Dictionary Configuration
+
+```python
+config_dict = {
+    "app_name": "my-app",
+    "redis": {"host": "localhost", "port": 6379, "db": 1},
+    "celery": {"worker_concurrency": 4}
+}
+
+throttle = CeleryThrottle.from_config_dict(config_dict)
+```
+
+## 🔍 Monitoring
+
+### Real-time CLI Monitor
 
 ```bash
-# Create a queue (5 tasks per minute)
-uv run scripts/queue_manager_cli.py create "5/1m"
-
-# List queues
-uv run scripts/queue_manager_cli.py list
-
-# Submit test tasks
-uv run scripts/queue_manager_cli.py test <queue_name> 10
-
-# Show queue details
-uv run scripts/queue_manager_cli.py show <queue_name>
+celery-throttle monitor
 ```
 
-## System Architecture
+### Programmatic Monitoring
+
+```python
+# Get queue statistics
+stats = throttle.get_queue_stats(queue_name)
+print(f"Waiting: {stats.tasks_waiting}")
+print(f"Processing: {stats.tasks_processing}")
+print(f"Completed: {stats.tasks_completed}")
+
+# Get rate limit status
+status = throttle.get_rate_limit_status(queue_name)
+print(f"Available tokens: {status['available_tokens']}")
+print(f"Next token in: {status['next_token_in']} seconds")
+
+# List all queues
+for queue in throttle.list_queues():
+    print(f"{queue.name}: {queue.rate_limit} ({'active' if queue.active else 'inactive'})")
+```
+
+## 🏗️ Architecture
 
 ### Components
 
-1. **Token Bucket Rate Limiter** (`src/rate_limiter.py`)
-   - Implements strict rate limiting using Redis and Lua scripts
-   - Atomic token acquisition and status checking
-   - Configurable refill rates
+1. **Token Bucket Rate Limiter**: Atomic Redis-based rate limiting with Lua scripts
+2. **Queue Manager**: Dynamic queue creation, configuration, and lifecycle management
+3. **Task Processor**: Celery integration with injectable app support
+4. **Task Dispatcher**: Efficient scheduling of queued tasks when tokens are available
+5. **CLI Interface**: Complete command-line management and monitoring
 
-2. **Queue Manager** (`src/queue_manager.py`)
-   - Dynamic queue creation/removal
-   - Rate limit configuration management
-   - Statistics tracking
+### How It Works
 
-3. **Celery Tasks** (`src/tasks.py`)
-   - Rate-limited task processing
-   - Task dispatcher for queued items
-   - Worker configuration with prefetch=1
+1. **Queue Creation**: Queues are created with specific rate limits and stored in Redis
+2. **Task Submission**: Tasks are either processed immediately or queued based on token availability
+3. **Token Management**: Redis Lua scripts atomically manage token buckets for precise rate limiting
+4. **Task Dispatch**: Background dispatcher efficiently schedules queued tasks when tokens become available
+5. **Worker Processing**: Celery workers process tasks with strict rate limit compliance
 
-4. **Monitoring Tools** (`scripts/monitor.py`)
-   - Real-time queue statistics
-   - Rate limit status display
-   - System overview
+## 📚 Examples
 
-5. **Management CLI** (`scripts/queue_manager_cli.py`)
-   - Queue CRUD operations
-   - Rate limit updates
-   - Test task submission
-
-### Rate Limit Format
-
-Rate limits are specified as `"requests/period"` with support for multiple time units and optional burst allowance:
-
-#### Time Units Supported
-
-- **Seconds**: `s` (e.g., `"10/60s"`)
-- **Minutes**: `m` (e.g., `"10/5m"`)
-- **Hours**: `h` (e.g., `"4000/3h"`)
-
-#### Smooth Rate Limiting (Default)
-
-- `"10/60s"` = 10 requests per 60 seconds, evenly distributed (1 every 6s)
-- `"10/5m"` = 10 requests per 5 minutes, evenly distributed (1 every 30s)
-- `"4000/3h"` = 4000 requests per 3 hours, evenly distributed (1 every 2.7s)
-- `"100/1h"` = 100 requests per hour, evenly distributed (1 every 36s)
-- `"1/1h"` = 1 request per hour
-
-#### Burst Rate Limiting (Optional)
-
-- `"10/60s:5"` = 10 requests per 60 seconds with up to 5 token burst allowance
-- `"4000/3h:50"` = 4000 requests per 3 hours with up to 50 token burst allowance
-
-**Default behavior**: All rate limits use smooth distribution (burst_allowance=1) to prevent bursting and ensure even request spacing over time.
-
-### Queue Naming
-
-Queues are automatically named as `batch_{uuid4}` where uuid4 is a random UUID.
-
-## Usage Examples
-
-### Creating and Managing Queues
-
-```bash
-# Create different types of queues
-uv run scripts/queue_manager_cli.py create "10/1m"     # Medium rate (smooth)
-uv run scripts/queue_manager_cli.py create "1/5m"      # Very slow (1 per 5 min)
-uv run scripts/queue_manager_cli.py create "50/10s"    # Fast rate (smooth)
-uv run scripts/queue_manager_cli.py create "4000/3h"   # Large batch over 3 hours
-uv run scripts/queue_manager_cli.py create "100/1h"    # Hourly processing
-uv run scripts/queue_manager_cli.py create "10/60s:5"  # Medium rate with burst allowance
-
-# List all queues
-uv run scripts/queue_manager_cli.py list
-
-# Update rate limit
-uv run scripts/queue_manager_cli.py update batch_xxx "20/60s"
-
-# Deactivate queue (stops processing but keeps data)
-uv run scripts/queue_manager_cli.py deactivate batch_xxx
-
-# Remove queue completely
-uv run scripts/queue_manager_cli.py remove batch_xxx
-```
-
-### Monitoring
-
-```bash
-# Continuous monitoring (updates every 2 seconds)
-uv run scripts/monitor.py
-
-# Single report
-uv run scripts/monitor.py --once
-
-# Custom update interval
-uv run scripts/monitor.py 5.0  # Update every 5 seconds
-```
-
-### Programmatic Usage
+### API Rate Limiting
 
 ```python
-import redis
-from src.queue_manager import UniversalQueueManager
-from src.tasks import RateLimitedTaskSubmitter
+from celery_throttle import CeleryThrottle
 
-# Initialize
-redis_client = redis.Redis(host='localhost', port=6379, db=0)
-queue_manager = UniversalQueueManager(redis_client)
-submitter = RateLimitedTaskSubmitter()
+throttle = CeleryThrottle()
 
-# Create queue
-queue_name = queue_manager.create_queue("5/1m")
+# Different API endpoints with different limits
+twitter_queue = throttle.create_queue("300/15m")  # Twitter API limit
+github_queue = throttle.create_queue("5000/1h")   # GitHub API limit
+slack_queue = throttle.create_queue("1/1s")       # Slack webhook limit
 
-# Submit tasks
-task_data = {"message": "Hello, world!", "priority": 1}
-submitted = submitter.submit_task(queue_name, task_data)
-
-# Check status
-stats = queue_manager.get_queue_stats(queue_name)
-rate_status = queue_manager.get_rate_limit_status(queue_name)
+# Submit API calls
+throttle.submit_task(twitter_queue, {"action": "tweet", "text": "Hello world"})
+throttle.submit_task(github_queue, {"action": "create_issue", "repo": "my-repo"})
+throttle.submit_task(slack_queue, {"action": "send_message", "channel": "general"})
 ```
 
-## Configuration
-
-### Celery Configuration
-
-The system is configured for strict rate limiting:
-
-- `worker_prefetch_multiplier=1`: Workers take one task at a time
-- `task_acks_late=True`: Tasks acknowledged after completion
-- `worker_concurrency=1`: Single worker process
-
-### Redis Configuration
-
-Default connection: `localhost:6379/0`
-
-Modify in source files if needed:
+### Batch Processing
 
 ```python
-redis_client = redis.Redis(host='localhost', port=6379, db=0)
+# Process large dataset over time
+batch_queue = throttle.create_queue("1000/6h")  # 1000 items over 6 hours
+
+# Submit batch of tasks
+tasks = [{"item_id": i, "data": f"item_{i}"} for i in range(5000)]
+results = throttle.submit_multiple_tasks(batch_queue, tasks)
+
+print(f"Immediately processed: {results['submitted']}")
+print(f"Queued for later: {results['queued']}")
 ```
 
-## Monitoring Data
+### Custom Task Processing
 
-The monitoring system displays:
+```python
+import time
+from celery_throttle.tasks.processor import RateLimitedTaskProcessor
 
-### Queue Statistics
+class CustomTaskProcessor(RateLimitedTaskProcessor):
+    def _register_task(self):
+        @self.app.task(bind=True)
+        def process_rate_limited_task(task_self, queue_name, task_data):
+            # Custom processing logic
+            if task_data.get("type") == "email":
+                return self.send_email(task_data)
+            elif task_data.get("type") == "webhook":
+                return self.call_webhook(task_data)
+            # ... custom logic
 
-- Queue name and rate limit
-- Active/inactive status
-- Tasks waiting, processing, completed, failed
-- Creation timestamp
+        self.process_rate_limited_task = process_rate_limited_task
 
-### Rate Limit Status
+# Use custom processor
+throttle = CeleryThrottle()
+custom_processor = CustomTaskProcessor(throttle.app, throttle.redis, throttle.queue_manager)
+throttle.task_processor = custom_processor
+```
 
-- Available tokens vs capacity
-- Token refill rate
-- Next token availability time
-
-### System Overview
-
-- Total and active queue counts
-- Redis connection status
-
-## Error Handling
-
-The system handles:
-
-- Redis connection failures (fails open)
-- Worker crashes (tasks return to queue)
-- Invalid rate limit formats
-- Queue not found errors
-- Task processing failures
-
-## Performance Considerations
-
-- **Token Bucket Precision**: Uses floating-point arithmetic for sub-second precision
-- **Redis Memory**: Queues expire after 1 hour of inactivity
-- **Dispatcher Frequency**: Default 100ms polling (configurable)
-- **Worker Efficiency**: No wasted CPU cycles waiting for rate limits
-
-## Development
-
-### Running Tests
+## 🧪 Testing
 
 ```bash
-# Run basic functionality test
-uv run examples/demo.py
+# Install development dependencies
+pip install celery-throttle[dev]
 
-# Run rate limiter unit tests
-uv run pytest test_rate_limiter.py -v
+# Run tests
+pytest
+
+# Run with coverage
+pytest --cov=celery_throttle
+
+# Run examples
+python -m examples.demo
+python -m examples.library_usage.basic_usage
 ```
 
-### Adding New Features
+## 🔧 Development
 
-1. Rate limiting logic: `src/rate_limiter.py`
-2. Queue management: `src/queue_manager.py`
-3. Task processing: `src/tasks.py`
-4. Monitoring: `scripts/monitor.py`
+### Local Development Setup
 
-## Troubleshooting
+```bash
+# Clone repository
+git clone https://github.com/user/celery-throttle.git
+cd celery-throttle
 
-### Worker Not Processing Tasks
+# Install in development mode
+pip install -e .[dev]
 
-1. Check Celery worker logs
-2. Verify Redis connection
-3. Ensure dispatcher is running
-4. Check queue active status
+# Start Redis (using Docker)
+docker run -p 6379:6379 -d redis
 
-### Rate Limiting Not Working
+# Run tests
+pytest
+```
 
-1. Verify Lua script registration
-2. Check Redis for rate limit keys: `redis-cli KEYS "rate_limit:*"`
-3. Monitor token bucket status in monitoring output
+## 🐛 Troubleshooting
 
-### High Memory Usage
+### Common Issues
+
+#### Workers not processing tasks
+
+- Check Redis connection: `redis-cli ping`
+- Verify Celery worker is running: `celery-throttle worker`
+- Ensure dispatcher is running: `celery-throttle dispatcher`
+- Check queue status: `celery-throttle queue list`
+
+#### Rate limiting not working
+
+- Verify Redis Lua script support
+- Check token bucket status: `celery-throttle queue show <queue-name>`
+- Monitor Redis keys: `redis-cli KEYS "rate_limit:*"`
+
+#### High memory usage
 
 - Queues auto-expire after 1 hour of inactivity
-- Clean up completed/failed task data periodically
+- Clean up old queues: `celery-throttle queue cleanup-empty`
 - Monitor Redis memory: `redis-cli INFO memory`
+
+### Performance Tuning
+
+- **Worker Concurrency**: Increase for non-rate-limited tasks
+- **Dispatcher Interval**: Tune based on your precision needs
+- **Redis Configuration**: Optimize for your memory and persistence requirements
+- **Token Bucket Precision**: Sub-second precision available for high-frequency limits
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🤝 Acknowledgments
+
+- Built on [Celery](https://github.com/celery/celery) for distributed task processing
+- Uses [Redis](https://redis.io/) for atomic operations and persistence
+- Implements token bucket algorithm for precise rate limiting
+- Inspired by real-world API rate limiting challenges

@@ -1,5 +1,5 @@
 import pytest
-from src.rate_limiter import RateLimit
+from celery_throttle.core.rate_limiter import RateLimit
 
 
 class TestRateLimitParsing:

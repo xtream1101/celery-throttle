@@ -7,7 +7,7 @@ import redis
 from loguru import logger
 from pydantic import BaseModel
 
-from .rate_limiter import RateLimit, TokenBucketRateLimiter
+from ..core.rate_limiter import RateLimit, TokenBucketRateLimiter
 
 
 class QueueConfig(BaseModel):

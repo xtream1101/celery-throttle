@@ -1,98 +1,91 @@
 import time
 import random
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 import redis
 from celery import Celery
 from loguru import logger
 
-from .queue_manager import UniversalQueueManager
+from ..queue.manager import UniversalQueueManager
 
 
-# Redis connection
-redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=False)
-queue_manager = UniversalQueueManager(redis_client)
+class RateLimitedTaskProcessor:
+    """Handles task processing with rate limiting integration."""
 
-# Celery app configuration
-app = Celery('rate_limited_worker')
-app.conf.update(
-    broker_url='redis://localhost:6379/0',
-    result_backend='redis://localhost:6379/0',
-    task_serializer='json',
-    accept_content=['json'],
-    result_serializer='json',
-    timezone='UTC',
-    enable_utc=True,
-    # Critical: Set prefetch to 1 to prevent workers from hoarding tasks
-    worker_prefetch_multiplier=1,
-    # Prevent task prefetching
-    task_acks_late=True,
-    # Configure worker to only take one task at a time
-    worker_concurrency=1,
-)
+    def __init__(self, celery_app: Celery, redis_client: redis.Redis, queue_manager: UniversalQueueManager):
+        self.app = celery_app
+        self.redis = redis_client
+        self.queue_manager = queue_manager
+        self._register_task()
 
+    def _register_task(self):
+        """Register the rate-limited task with the Celery app."""
+        @self.app.task(bind=True)
+        def process_rate_limited_task(task_self, queue_name: str, task_data: Dict[str, Any]):
+            """
+            Process a task with rate limiting.
+            This task should only be called when we know a token is available.
+            """
+            task_id = task_self.request.id
+            start_time = time.time()
 
-@app.task(bind=True)
-def process_rate_limited_task(self, queue_name: str, task_data: Dict[str, Any]):
-    """
-    Process a task with rate limiting.
-    This task should only be called when we know a token is available.
-    """
-    task_id = self.request.id
-    start_time = time.time()
+            logger.info(f"Starting task {task_id} for queue {queue_name}")
 
-    logger.info(f"Starting task {task_id} for queue {queue_name}")
+            # Mark task as processing
+            processing_key = f"processing:{queue_name}"
+            self.redis.sadd(processing_key, task_id)
 
-    # Mark task as processing
-    processing_key = f"processing:{queue_name}"
-    redis_client.sadd(processing_key, task_id)
+            # Update stats
+            self.queue_manager.increment_stat(queue_name, "tasks_processing", 1)
 
-    # Update stats
-    queue_manager.increment_stat(queue_name, "tasks_processing", 1)
+            try:
+                # Simulate work with random sleep (customize this in your implementation)
+                work_duration = random.uniform(0.1, 2.0)  # 0.1 to 2 seconds
+                logger.info(f"Task {task_id} processing for {work_duration:.2f}s...")
+                time.sleep(work_duration)
 
-    try:
-        # Simulate work with random sleep
-        work_duration = random.uniform(0.1, 2.0)  # 0.1 to 2 seconds
-        logger.info(f"Task {task_id} processing for {work_duration:.2f}s...")
-        time.sleep(work_duration)
+                # Task completed successfully
+                end_time = time.time()
+                logger.info(f"Task {task_id} completed in {end_time - start_time:.2f}s")
 
-        # Task completed successfully
-        end_time = time.time()
-        logger.info(f"Task {task_id} completed in {end_time - start_time:.2f}s")
+                # Update stats
+                self.queue_manager.increment_stat(queue_name, "tasks_completed", 1)
+                self.queue_manager.increment_stat(queue_name, "tasks_processing", -1)
 
-        # Update stats
-        queue_manager.increment_stat(queue_name, "tasks_completed", 1)
-        queue_manager.increment_stat(queue_name, "tasks_processing", -1)
+                return {
+                    "status": "success",
+                    "queue_name": queue_name,
+                    "task_id": task_id,
+                    "duration": end_time - start_time,
+                    "work_duration": work_duration,
+                    "completed_at": datetime.now().isoformat()
+                }
 
-        return {
-            "status": "success",
-            "queue_name": queue_name,
-            "task_id": task_id,
-            "duration": end_time - start_time,
-            "work_duration": work_duration,
-            "completed_at": datetime.now().isoformat()
-        }
+            except Exception as e:
+                logger.error(f"Task {task_id} failed: {e}")
 
-    except Exception as e:
-        logger.error(f"Task {task_id} failed: {e}")
+                # Update stats
+                self.queue_manager.increment_stat(queue_name, "tasks_failed", 1)
+                self.queue_manager.increment_stat(queue_name, "tasks_processing", -1)
 
-        # Update stats
-        queue_manager.increment_stat(queue_name, "tasks_failed", 1)
-        queue_manager.increment_stat(queue_name, "tasks_processing", -1)
+                raise
+            finally:
+                # Remove from processing set
+                self.redis.srem(processing_key, task_id)
 
-        raise
-    finally:
-        # Remove from processing set
-        redis_client.srem(processing_key, task_id)
+        # Store reference to the task for external access
+        self.process_rate_limited_task = process_rate_limited_task
 
 
 class RateLimitedTaskSubmitter:
     """Submits tasks to queues, respecting rate limits."""
 
-    def __init__(self):
+    def __init__(self, redis_client: redis.Redis, queue_manager: UniversalQueueManager,
+                 task_processor: RateLimitedTaskProcessor):
         self.redis = redis_client
         self.queue_manager = queue_manager
+        self.task_processor = task_processor
 
     def submit_task(self, queue_name: str, task_data: Dict[str, Any]) -> bool:
         """
@@ -107,7 +100,7 @@ class RateLimitedTaskSubmitter:
 
         if can_process:
             # Submit task immediately
-            process_rate_limited_task.apply_async(
+            self.task_processor.process_rate_limited_task.apply_async(
                 args=[queue_name, task_data]
             )
             logger.info(f"Task submitted to {queue_name} for immediate processing")
@@ -140,9 +133,11 @@ class RateLimitedTaskSubmitter:
 class RateLimitedTaskDispatcher:
     """Dispatches queued tasks when tokens become available."""
 
-    def __init__(self):
+    def __init__(self, redis_client: redis.Redis, queue_manager: UniversalQueueManager,
+                 task_processor: RateLimitedTaskProcessor):
         self.redis = redis_client
         self.queue_manager = queue_manager
+        self.task_processor = task_processor
 
     def dispatch_pending_tasks(self):
         """Check all active queues and dispatch pending tasks when tokens are available."""
@@ -170,7 +165,7 @@ class RateLimitedTaskDispatcher:
                         task_data = task_payload["data"]
 
                         # Submit task for processing
-                        process_rate_limited_task.apply_async(
+                        self.task_processor.process_rate_limited_task.apply_async(
                             args=[queue_name, task_data]
                         )
 
@@ -179,7 +174,7 @@ class RateLimitedTaskDispatcher:
 
                     except json.JSONDecodeError as e:
                         logger.error(f"Failed to decode task payload from {queue_name}: {e}")
-                        queue_manager.increment_stat(queue_name, "tasks_failed", 1)
+                        self.queue_manager.increment_stat(queue_name, "tasks_failed", 1)
             else:
                 # Store when this queue should be checked again
                 if wait_time > 0:

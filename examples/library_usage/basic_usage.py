@@ -21,6 +21,9 @@ def main():
     queue_name = throttle.create_queue("5/10s")
     print(f"Created queue: {queue_name}")
 
+    # Alternative: Create queue with burst allowance (allows initial burst of tasks)
+    # burst_queue = throttle.create_queue("5/10s:3")  # 5 per 10s with 3 burst tokens
+
     # Submit some test tasks
     print("\nSubmitting 8 test tasks...")
     for i in range(8):

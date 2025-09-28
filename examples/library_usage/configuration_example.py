@@ -31,7 +31,6 @@ def example_with_config_objects():
         broker_url="redis://localhost:6379/1",
         result_backend="redis://localhost:6379/1",
         worker_concurrency=2,  # Allow 2 concurrent workers
-        app_name="my-custom-throttle-app"
     )
 
     # Create main configuration

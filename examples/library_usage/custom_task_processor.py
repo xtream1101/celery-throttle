@@ -13,7 +13,11 @@ from datetime import datetime
 from celery import Celery
 from celery_throttle import CeleryThrottle
 from celery_throttle.tasks.processor import RateLimitedTaskProcessor
-from loguru import logger
+import logging
+
+# Set up logger for this example
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 import redis
 
 

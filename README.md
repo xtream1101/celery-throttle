@@ -96,13 +96,18 @@ celery-throttle --target-queue=my_queue --queue-prefix=my_app dedicated-worker
 celery-throttle --redis-host=localhost --redis-port=6379 dispatcher
 
 # Manage queues
-celery-throttle queue create "10/1m"                      # Create queue
+celery-throttle queue create "10/1m"                      # Create queue (10 per minute)
+celery-throttle queue create "5/30s:3"                    # Create queue with burst (5 per 30s, 3 burst)
 celery-throttle queue list                                # List all queues
 celery-throttle queue show <queue-name>                   # Show queue details
 celery-throttle queue test <queue-name> 5                 # Submit 5 test tasks
+celery-throttle queue remove <queue-name>                 # Remove queue
+celery-throttle queue cleanup-empty                       # Remove empty/inactive queues
 ```
 
 ## 📋 Rate Limit Formats
+
+Celery Throttle supports flexible rate limit formats with various time units and optional burst allowances.
 
 ### Time Units
 
@@ -110,9 +115,35 @@ celery-throttle queue test <queue-name> 5                 # Submit 5 test tasks
 - **Minutes**: `"10/5m"` (10 requests per 5 minutes)
 - **Hours**: `"4000/3h"` (4000 requests per 3 hours)
 
+### Format Pattern
+
+Rate limits follow the pattern: `requests/period[time_unit][:burst_allowance]`
+
+- `requests`: Number of requests allowed
+- `period`: Time period value
+- `time_unit`: `s` (seconds), `m` (minutes), or `h` (hours)
+- `burst_allowance`: Optional burst token capacity (defaults to 1)
+
+### Examples
+
+```python
+# Basic rate limits with different time units
+throttle.create_queue("10/60s")     # 10 requests per 60 seconds
+throttle.create_queue("5/2m")       # 5 requests per 2 minutes
+throttle.create_queue("1000/1h")    # 1000 requests per 1 hour
+throttle.create_queue("50/30m")     # 50 requests per 30 minutes
+
+# Rate limits with burst allowance
+throttle.create_queue("10/60s:5")   # 10/minute with 5 burst tokens
+throttle.create_queue("100/1h:20")  # 100/hour with 20 burst tokens
+throttle.create_queue("5/30s:3")    # 5 per 30 seconds with 3 burst tokens
+```
+
 ### Distribution Modes
 
 #### Smooth Distribution (Default)
+
+By default, tasks are distributed evenly over time to prevent resource bursting:
 
 ```python
 throttle.create_queue("10/60s")   # 1 task every 6 seconds
@@ -122,9 +153,11 @@ throttle.create_queue("1/5m")     # 1 task every 5 minutes
 
 #### Burst Allowance (Optional)
 
+Add burst capacity to handle traffic spikes while maintaining overall rate limits:
+
 ```python
-throttle.create_queue("10/60s:5")   # 10/minute with up to 5 burst tokens
-throttle.create_queue("100/1h:20")  # 100/hour with up to 20 burst tokens
+throttle.create_queue("10/60s:5")   # Allow up to 5 immediate tasks, then smooth distribution
+throttle.create_queue("100/1h:20")  # Allow up to 20 immediate tasks, then smooth distribution
 ```
 
 ## 🔧 Configuration
@@ -392,20 +425,34 @@ print(f"Queued for later: {results['queued']}")
 
 ```python
 import time
+from typing import Any, Dict
 from celery_throttle.tasks.processor import RateLimitedTaskProcessor
 
 class CustomTaskProcessor(RateLimitedTaskProcessor):
     def _register_task(self):
         @self.app.task(bind=True)
-        def process_rate_limited_task(task_self, queue_name, task_data):
-            # Custom processing logic
-            if task_data.get("type") == "email":
+        def process_rate_limited_task(task_self, queue_name: str, task_data: Dict[str, Any]):
+            # Custom processing logic based on task type
+            task_type = task_data.get("type", "default")
+
+            if task_type == "email":
                 return self.send_email(task_data)
-            elif task_data.get("type") == "webhook":
+            elif task_type == "webhook":
                 return self.call_webhook(task_data)
-            # ... custom logic
+            elif task_type == "api_call":
+                return self.process_api_call(task_data)
+            else:
+                return self.process_default_task(task_data)
 
         self.process_rate_limited_task = process_rate_limited_task
+
+    def send_email(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
+        # Custom email logic
+        return {"status": "sent", "recipient": task_data.get("recipient")}
+
+    def call_webhook(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
+        # Custom webhook logic
+        return {"status": "called", "url": task_data.get("url")}
 
 # Use custom processor
 # Option A - pass the processor class to CeleryThrottle and let the library instantiate it:
@@ -415,12 +462,11 @@ throttle = CeleryThrottle(task_processor_cls=CustomTaskProcessor)
 # the throttle's Celery app, Redis client and queue manager, and set it explicitly.
 # This is the safe pattern that guarantees internals match.
 throttle = CeleryThrottle()
-custom_processor = CustomTaskProcessor(throttle.app, throttle.redis, throttle.queue_manager)
+custom_processor = CustomTaskProcessor(throttle.app, throttle.redis, throttle.queue_manager, throttle.config.target_queue)
 throttle.set_task_processor(custom_processor)
 
-# (Runtime replacement via `set_task_processor` is supported but not recommended in
-# most production scenarios; prefer injecting the processor at construction or
-# creating the processor against the throttle internals and then setting it.)
+# Option C - Runtime replacement (use with caution in production)
+throttle.set_task_processor(CustomTaskProcessor)  # Can pass class or instance
 ```
 
 ## 🧪 Testing

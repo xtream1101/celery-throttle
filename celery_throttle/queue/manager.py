@@ -4,7 +4,9 @@ import json
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 import redis
-from loguru import logger
+import logging
+
+logger = logging.getLogger(__name__)
 from pydantic import BaseModel
 
 from ..core.rate_limiter import RateLimit, TokenBucketRateLimiter

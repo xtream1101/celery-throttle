@@ -1,7 +1,9 @@
 from typing import Optional, Union, Dict, Any, List, Type
 import redis
 from celery import Celery
-from loguru import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 from .config import CeleryThrottleConfig, RedisConfig, CeleryConfig
 from .core.rate_limiter import TokenBucketRateLimiter

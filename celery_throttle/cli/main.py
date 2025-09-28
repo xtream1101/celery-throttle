@@ -6,7 +6,9 @@ from typing import Optional
 
 import click
 import redis
-from loguru import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 from ..main import CeleryThrottle
 from ..config import CeleryThrottleConfig

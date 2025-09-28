@@ -2,7 +2,9 @@ from typing import Optional, Dict, Any, Union
 import redis
 from celery import Celery
 from pydantic import BaseModel, Field
-from loguru import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class RedisConfig(BaseModel):

@@ -5,7 +5,9 @@ Worker inspection module for monitoring Celery worker queue sizes and status.
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 from celery import Celery
-from loguru import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass

@@ -3,7 +3,9 @@ import uuid
 from typing import Dict, Optional, Tuple
 from datetime import datetime, timedelta
 import redis
-from loguru import logger
+import logging
+
+logger = logging.getLogger(__name__)
 from pydantic import BaseModel
 import re
 

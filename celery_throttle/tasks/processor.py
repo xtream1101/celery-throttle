@@ -5,7 +5,9 @@ from typing import Any, Dict, List, Optional
 from datetime import datetime
 import redis
 from celery import Celery
-from loguru import logger
+import logging
+
+logger = logging.getLogger(__name__)
 
 from ..queue.manager import UniversalQueueManager
 

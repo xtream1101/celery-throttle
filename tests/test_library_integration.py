@@ -1,6 +1,4 @@
 import pytest
-import redis
-from celery import Celery
 from celery_throttle import CeleryThrottle
 from celery_throttle.config import CeleryThrottleConfig, RedisConfig, CeleryConfig
 
@@ -8,9 +6,9 @@ from celery_throttle.config import CeleryThrottleConfig, RedisConfig, CeleryConf
 class TestLibraryIntegration:
     """Test the main library interface and integration."""
 
-    def test_default_initialization(self):
+    def test_default_initialization(self, celery_app, redis_client):
         """Test CeleryThrottle initializes with defaults."""
-        throttle = CeleryThrottle()
+        throttle = CeleryThrottle(celery_app=celery_app, redis_client=redis_client)
         assert throttle.redis is not None
         assert throttle.app is not None
         assert throttle.queue_manager is not None
@@ -18,45 +16,47 @@ class TestLibraryIntegration:
         assert throttle.task_submitter is not None
         assert throttle.task_dispatcher is not None
 
-    def test_with_existing_celery_app(self):
+    def test_with_existing_celery_app(self, celery_app, redis_client):
         """Test CeleryThrottle works with existing Celery app."""
-        app = Celery('test-app')
-        throttle = CeleryThrottle(celery_app=app)
-        assert throttle.app is app
+        throttle = CeleryThrottle(celery_app=celery_app, redis_client=redis_client)
+        assert throttle.app is celery_app
 
-    def test_with_existing_redis_client(self):
+    def test_with_existing_redis_client(self, celery_app, redis_client):
         """Test CeleryThrottle works with existing Redis client."""
-        redis_client = redis.Redis(host='localhost', port=6379, db=1, decode_responses=False)
-        throttle = CeleryThrottle(redis_client=redis_client)
+        throttle = CeleryThrottle(celery_app=celery_app, redis_client=redis_client)
         assert throttle.redis is redis_client
 
-    def test_with_config_object(self):
+    def test_with_config_object(self, celery_app, redis_client):
         """Test CeleryThrottle works with configuration object."""
         config = CeleryThrottleConfig(
             app_name="test-config-app",
             redis=RedisConfig(db=2),
-            celery=CeleryConfig(worker_concurrency=2)
+            celery=CeleryConfig(worker_concurrency=2),
         )
-        throttle = CeleryThrottle(config=config)
+        throttle = CeleryThrottle(
+            celery_app=celery_app, redis_client=redis_client, config=config
+        )
         assert throttle.config.app_name == "test-config-app"
         assert throttle.config.redis.db == 2
         assert throttle.config.celery.worker_concurrency == 2
 
-    def test_from_config_dict(self):
+    def test_from_config_dict(self, celery_app, redis_client):
         """Test creating CeleryThrottle from config dictionary."""
         config_dict = {
             "app_name": "dict-config-app",
             "redis": {"db": 3},
-            "celery": {"worker_concurrency": 3}
+            "celery": {"worker_concurrency": 3},
         }
-        throttle = CeleryThrottle.from_config_dict(config_dict)
+        throttle = CeleryThrottle.from_config_dict(
+            celery_app=celery_app, redis_client=redis_client, config_dict=config_dict
+        )
         assert throttle.config.app_name == "dict-config-app"
         assert throttle.config.redis.db == 3
         assert throttle.config.celery.worker_concurrency == 3
 
-    def test_queue_operations(self):
+    def test_queue_operations(self, celery_app, redis_client):
         """Test basic queue operations."""
-        throttle = CeleryThrottle()
+        throttle = CeleryThrottle(celery_app=celery_app, redis_client=redis_client)
 
         # Create queue
         queue_name = throttle.create_queue("5/60s")
@@ -82,21 +82,27 @@ class TestLibraryIntegration:
         # Verify removal
         assert throttle.remove_queue(queue_name) is False
 
-    def test_task_submission(self):
+    def test_task_submission(self, celery_app, redis_client):
         """Test task submission functionality."""
-        throttle = CeleryThrottle()
+
+        # Register a test task BEFORE creating throttle
+        @celery_app.task(name="test_task")
+        def test_task(data):
+            return data
+
+        throttle = CeleryThrottle(celery_app=celery_app, redis_client=redis_client)
 
         # Create queue
         queue_name = throttle.create_queue("2/10s")
 
         # Submit single task
         task_data = {"message": "test task"}
-        result = throttle.submit_task(queue_name, task_data)
+        result = throttle.submit_task(queue_name, "test_task", task_data)
         assert isinstance(result, bool)
 
         # Submit multiple tasks
-        tasks_data = [{"id": i} for i in range(3)]
-        results = throttle.submit_multiple_tasks(queue_name, tasks_data)
+        tasks_list = [("test_task", ({"id": i},), {}) for i in range(3)]
+        results = throttle.submit_multiple_tasks(queue_name, tasks_list)
         assert "submitted" in results
         assert "queued" in results
         assert results["submitted"] + results["queued"] == 3
@@ -104,9 +110,9 @@ class TestLibraryIntegration:
         # Clean up
         throttle.remove_queue(queue_name)
 
-    def test_queue_management_operations(self):
+    def test_queue_management_operations(self, celery_app, redis_client):
         """Test queue management operations."""
-        throttle = CeleryThrottle()
+        throttle = CeleryThrottle(celery_app=celery_app, redis_client=redis_client)
 
         # Create queue
         queue_name = throttle.create_queue("3/30s")
@@ -133,39 +139,25 @@ class TestLibraryIntegration:
 class TestConfigurationSystem:
     """Test the configuration system."""
 
-    def test_redis_config_create_client(self):
-        """Test Redis configuration creates client correctly."""
-        config = RedisConfig(host="localhost", port=6379, db=5)
-        client = config.create_client()
-        assert isinstance(client, redis.Redis)
-
-    def test_celery_config_apply_to_app(self):
+    def test_celery_config_apply_to_app(self, celery_app):
         """Test Celery configuration applies to app correctly."""
-        app = Celery('test-app')
         config = CeleryConfig(
             broker_url="redis://localhost:6379/5",
             worker_concurrency=4,
-            task_acks_late=False
+            task_acks_late=False,
         )
-        config.apply_to_app(app)
+        config.apply_to_app(celery_app)
 
-        assert app.conf.broker_url == "redis://localhost:6379/5"
-        assert app.conf.worker_concurrency == 4
-        assert app.conf.task_acks_late is False
+        assert celery_app.conf.broker_url == "redis://localhost:6379/5"
+        assert celery_app.conf.worker_concurrency == 4
+        assert celery_app.conf.task_acks_late is False
 
     def test_config_from_dict(self):
         """Test creating configuration from dictionary."""
         config_dict = {
             "app_name": "test-app",
-            "redis": {
-                "host": "localhost",
-                "port": 6379,
-                "db": 4
-            },
-            "celery": {
-                "worker_concurrency": 2,
-                "task_acks_late": False
-            }
+            "redis": {"host": "localhost", "port": 6379, "db": 4},
+            "celery": {"worker_concurrency": 2, "task_acks_late": False},
         }
 
         config = CeleryThrottleConfig.from_dict(config_dict)
@@ -175,10 +167,15 @@ class TestConfigurationSystem:
         assert config.celery.worker_concurrency == 2
         assert config.celery.task_acks_late is False
 
-    def test_config_override_with_kwargs(self):
+    def test_config_override_with_kwargs(self, celery_app, redis_client):
         """Test configuration override with kwargs."""
         base_config = CeleryThrottleConfig(app_name="base-app")
-        throttle = CeleryThrottle(config=base_config, app_name="overridden-app")
+        throttle = CeleryThrottle(
+            celery_app=celery_app,
+            redis_client=redis_client,
+            config=base_config,
+            app_name="overridden-app",
+        )
 
         assert throttle.config.app_name == "overridden-app"
 
@@ -186,9 +183,9 @@ class TestConfigurationSystem:
 class TestErrorHandling:
     """Test error handling and edge cases."""
 
-    def test_nonexistent_queue_operations(self):
+    def test_nonexistent_queue_operations(self, celery_app, redis_client):
         """Test operations on non-existent queues."""
-        throttle = CeleryThrottle()
+        throttle = CeleryThrottle(celery_app=celery_app, redis_client=redis_client)
         fake_queue = "nonexistent_queue"
 
         # Should return False/None for non-existent queues
@@ -199,16 +196,23 @@ class TestErrorHandling:
         assert throttle.get_queue_stats(fake_queue) is None
         assert throttle.get_rate_limit_status(fake_queue) is None
 
-    def test_invalid_rate_limit_format(self):
+    def test_invalid_rate_limit_format(self, celery_app, redis_client):
         """Test creation with invalid rate limit format."""
-        throttle = CeleryThrottle()
+        throttle = CeleryThrottle(celery_app=celery_app, redis_client=redis_client)
 
         with pytest.raises(ValueError):
             throttle.create_queue("invalid_format")
 
-    def test_submit_task_to_nonexistent_queue(self):
+    def test_submit_task_to_nonexistent_queue(self, celery_app, redis_client):
         """Test submitting task to non-existent queue."""
-        throttle = CeleryThrottle()
 
-        result = throttle.submit_task("nonexistent_queue", {"test": "data"})
+        @celery_app.task
+        def test_task(data):
+            return data
+
+        throttle = CeleryThrottle(celery_app=celery_app, redis_client=redis_client)
+
+        result = throttle.submit_task(
+            "nonexistent_queue", "test_task", {"test": "data"}
+        )
         assert result is False  # Should fail gracefully

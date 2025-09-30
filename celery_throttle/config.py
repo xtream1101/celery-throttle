@@ -1,14 +1,18 @@
-from typing import Optional, Dict, Any, Union
+from typing import Optional, Dict, Any
 import redis
 from celery import Celery
-from pydantic import BaseModel, Field
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 import logging
 
 logger = logging.getLogger(__name__)
 
 
-class RedisConfig(BaseModel):
+class RedisConfig(BaseSettings):
     """Redis connection configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="CELERY_THROTTLE_REDIS_")
+
     host: str = "localhost"
     port: int = 6379
     db: int = 0
@@ -22,12 +26,15 @@ class RedisConfig(BaseModel):
             port=self.port,
             db=self.db,
             password=self.password,
-            decode_responses=self.decode_responses
+            decode_responses=self.decode_responses,
         )
 
 
-class CeleryConfig(BaseModel):
+class CeleryConfig(BaseSettings):
     """Celery configuration for rate limiting."""
+
+    model_config = SettingsConfigDict(env_prefix="CELERY_THROTTLE_")
+
     broker_url: str = "redis://localhost:6379/0"
     result_backend: str = "redis://localhost:6379/0"
     task_serializer: str = "json"
@@ -55,62 +62,18 @@ class CeleryConfig(BaseModel):
         )
 
 
-class CeleryThrottleConfig(BaseModel):
+class CeleryThrottleConfig(BaseSettings):
     """Main configuration for CeleryThrottle."""
+
+    model_config = SettingsConfigDict(env_prefix="CELERY_THROTTLE_")
+
     redis: RedisConfig = Field(default_factory=RedisConfig)
     celery: CeleryConfig = Field(default_factory=CeleryConfig)
     app_name: str = "celery-throttle"
-    target_queue: str = "rate_limited_tasks"  # Celery queue for rate-limited tasks
-    queue_prefix: str = "throttle"  # Redis key prefix for isolation
+    target_queue: str = "rate-limited-queue"
+    queue_prefix: str = "throttle"
 
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> "CeleryThrottleConfig":
         """Create configuration from a dictionary."""
         return cls.model_validate(config_dict)
-
-    @classmethod
-    def from_env(cls, prefix: str = "CELERY_THROTTLE_") -> "CeleryThrottleConfig":
-        """Create configuration from environment variables."""
-        import os
-
-        config_dict = {}
-
-        # Redis configuration
-        redis_config = {}
-        if f"{prefix}REDIS_HOST" in os.environ:
-            redis_config["host"] = os.environ[f"{prefix}REDIS_HOST"]
-        if f"{prefix}REDIS_PORT" in os.environ:
-            redis_config["port"] = int(os.environ[f"{prefix}REDIS_PORT"])
-        if f"{prefix}REDIS_DB" in os.environ:
-            redis_config["db"] = int(os.environ[f"{prefix}REDIS_DB"])
-        if f"{prefix}REDIS_PASSWORD" in os.environ:
-            redis_config["password"] = os.environ[f"{prefix}REDIS_PASSWORD"]
-
-        if redis_config:
-            config_dict["redis"] = redis_config
-
-        # Celery configuration
-        celery_config = {}
-        if f"{prefix}BROKER_URL" in os.environ:
-            celery_config["broker_url"] = os.environ[f"{prefix}BROKER_URL"]
-        if f"{prefix}RESULT_BACKEND" in os.environ:
-            celery_config["result_backend"] = os.environ[f"{prefix}RESULT_BACKEND"]
-        if f"{prefix}WORKER_CONCURRENCY" in os.environ:
-            celery_config["worker_concurrency"] = int(os.environ[f"{prefix}WORKER_CONCURRENCY"])
-
-        if celery_config:
-            config_dict["celery"] = celery_config
-
-        # App name
-        if f"{prefix}APP_NAME" in os.environ:
-            config_dict["app_name"] = os.environ[f"{prefix}APP_NAME"]
-
-        # Target queue
-        if f"{prefix}TARGET_QUEUE" in os.environ:
-            config_dict["target_queue"] = os.environ[f"{prefix}TARGET_QUEUE"]
-
-        # Queue prefix
-        if f"{prefix}QUEUE_PREFIX" in os.environ:
-            config_dict["queue_prefix"] = os.environ[f"{prefix}QUEUE_PREFIX"]
-
-        return cls.from_dict(config_dict)

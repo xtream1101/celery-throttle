@@ -1,96 +1,71 @@
-import time
-import random
 import json
-from typing import Any, Dict, List, Optional
+import logging
+import time
 from datetime import datetime
+from typing import Dict, List
+
 import redis
 from celery import Celery
-import logging
+
+from ..config import CeleryThrottleConfig
+from ..queue.manager import UniversalQueueManager
 
 logger = logging.getLogger(__name__)
 
-from ..queue.manager import UniversalQueueManager
+# Get default from config
+_default_target_queue = CeleryThrottleConfig().target_queue
 
 
 class RateLimitedTaskProcessor:
     """Handles task processing with rate limiting integration."""
 
-    def __init__(self, celery_app: Celery, redis_client: redis.Redis, queue_manager: UniversalQueueManager, target_queue: str = "rate_limited_tasks"):
+    def __init__(
+        self,
+        celery_app: Celery,
+        redis_client: redis.Redis,
+        queue_manager: UniversalQueueManager,
+        target_queue: str = _default_target_queue,
+    ):
         self.app = celery_app
         self.redis = redis_client
         self.queue_manager = queue_manager
         self.target_queue = target_queue
-        self._register_task()
 
-    def _register_task(self):
-        """Register the rate-limited task with the Celery app."""
-        @self.app.task(bind=True, queue=self.target_queue)
-        def process_rate_limited_task(task_self, queue_name: str, task_data: Dict[str, Any]):
-            """
-            Process a task with rate limiting.
-            This task should only be called when we know a token is available.
-            """
-            task_id = task_self.request.id
-            start_time = time.time()
+    def execute_task(self, queue_name: str, task_name: str, args: tuple, kwargs: dict):
+        """Execute a Celery task by name with rate limiting tracking."""
+        # Get the task from the Celery app
+        if task_name not in self.app.tasks:
+            logger.error(f"Task {task_name} not found in Celery app")
+            raise ValueError(f"Task {task_name} not registered with Celery app")
 
-            logger.info(f"Starting task {task_id} for queue {queue_name}")
+        task = self.app.tasks[task_name]
 
-            # Mark task as processing
-            processing_key = f"{self.queue_manager.queue_prefix}:processing:{queue_name}"
-            self.redis.sadd(processing_key, task_id)
+        # Submit the task to be processed
+        result = task.apply_async(args=args, kwargs=kwargs, queue=self.target_queue)
+        logger.info(
+            f"Submitted task {task_name} with ID {result.id} from queue {queue_name}"
+        )
 
-            # Update stats
-            self.queue_manager.increment_stat(queue_name, "tasks_processing", 1)
+        # Update stats
+        self.queue_manager.increment_stat(queue_name, "tasks_submitted", 1)
 
-            try:
-                # Simulate work with random sleep (customize this in your implementation)
-                work_duration = random.uniform(0.1, 2.0)  # 0.1 to 2 seconds
-                logger.info(f"Task {task_id} processing for {work_duration:.2f}s...")
-                time.sleep(work_duration)
-
-                # Task completed successfully
-                end_time = time.time()
-                logger.info(f"Task {task_id} completed in {end_time - start_time:.2f}s")
-
-                # Update stats
-                self.queue_manager.increment_stat(queue_name, "tasks_completed", 1)
-                self.queue_manager.increment_stat(queue_name, "tasks_processing", -1)
-
-                return {
-                    "status": "success",
-                    "queue_name": queue_name,
-                    "task_id": task_id,
-                    "duration": end_time - start_time,
-                    "work_duration": work_duration,
-                    "completed_at": datetime.now().isoformat()
-                }
-
-            except Exception as e:
-                logger.error(f"Task {task_id} failed: {e}")
-
-                # Update stats
-                self.queue_manager.increment_stat(queue_name, "tasks_failed", 1)
-                self.queue_manager.increment_stat(queue_name, "tasks_processing", -1)
-
-                raise
-            finally:
-                # Remove from processing set
-                self.redis.srem(processing_key, task_id)
-
-        # Store reference to the task for external access
-        self.process_rate_limited_task = process_rate_limited_task
+        return result
 
 
 class RateLimitedTaskSubmitter:
     """Submits tasks to queues, respecting rate limits."""
 
-    def __init__(self, redis_client: redis.Redis, queue_manager: UniversalQueueManager,
-                 task_processor: RateLimitedTaskProcessor):
+    def __init__(
+        self,
+        redis_client: redis.Redis,
+        queue_manager: UniversalQueueManager,
+        task_processor: RateLimitedTaskProcessor,
+    ):
         self.redis = redis_client
         self.queue_manager = queue_manager
         self.task_processor = task_processor
 
-    def submit_task(self, queue_name: str, task_data: Dict[str, Any]) -> bool:
+    def submit_task(self, queue_name: str, task_name: str, *args, **kwargs) -> bool:
         """
         Submit a task to a queue. Returns True if submitted, False if rate limited.
         """
@@ -103,30 +78,45 @@ class RateLimitedTaskSubmitter:
 
         if can_process:
             # Submit task immediately
-            self.task_processor.process_rate_limited_task.apply_async(
-                args=[queue_name, task_data],
-                queue=self.task_processor.target_queue
+            self.task_processor.execute_task(queue_name, task_name, args, kwargs)
+            logger.info(
+                f"Task {task_name} submitted to {queue_name} for immediate processing"
             )
-            logger.info(f"Task submitted to {queue_name} for immediate processing")
             return True
         else:
             # Add to pending queue
             task_queue_key = f"{self.queue_manager.queue_prefix}:queue:{queue_name}"
             task_payload = {
-                "data": task_data,
+                "task_name": task_name,
+                "args": args,
+                "kwargs": kwargs,
                 "submitted_at": datetime.now().isoformat(),
-                "wait_time": wait_time
+                "wait_time": wait_time,
             }
             self.redis.lpush(task_queue_key, json.dumps(task_payload))
-            logger.info(f"Task queued for {queue_name}, next available in {wait_time:.2f}s")
+            logger.info(
+                f"Task {task_name} queued for {queue_name}, next available in {wait_time:.2f}s"
+            )
             return False
 
-    def submit_multiple_tasks(self, queue_name: str, tasks_data: List[Dict[str, Any]]) -> Dict[str, int]:
-        """Submit multiple tasks to a queue."""
+    def submit_multiple_tasks(
+        self, queue_name: str, tasks_list: List[tuple]
+    ) -> Dict[str, int]:
+        """Submit multiple tasks to a queue. Each task should be (task_name, args, kwargs)."""
         stats = {"submitted": 0, "queued": 0}
 
-        for task_data in tasks_data:
-            if self.submit_task(queue_name, task_data):
+        for task_info in tasks_list:
+            if len(task_info) == 3:
+                task_name, args, kwargs = task_info
+            elif len(task_info) == 2:
+                task_name, args = task_info
+                kwargs = {}
+            else:
+                task_name = task_info[0]
+                args = ()
+                kwargs = {}
+
+            if self.submit_task(queue_name, task_name, *args, **kwargs):
                 stats["submitted"] += 1
             else:
                 stats["queued"] += 1
@@ -137,8 +127,12 @@ class RateLimitedTaskSubmitter:
 class RateLimitedTaskDispatcher:
     """Dispatches queued tasks when tokens become available."""
 
-    def __init__(self, redis_client: redis.Redis, queue_manager: UniversalQueueManager,
-                 task_processor: RateLimitedTaskProcessor):
+    def __init__(
+        self,
+        redis_client: redis.Redis,
+        queue_manager: UniversalQueueManager,
+        task_processor: RateLimitedTaskProcessor,
+    ):
         self.redis = redis_client
         self.queue_manager = queue_manager
         self.task_processor = task_processor
@@ -166,19 +160,27 @@ class RateLimitedTaskDispatcher:
                 if task_payload_json:
                     try:
                         task_payload = json.loads(task_payload_json.decode())
-                        task_data = task_payload["data"]
+                        task_name = task_payload["task_name"]
+                        args = tuple(task_payload.get("args", []))
+                        kwargs = task_payload.get("kwargs", {})
 
-                        # Submit task for processing
-                        self.task_processor.process_rate_limited_task.apply_async(
-                            args=[queue_name, task_data],
-                            queue=self.task_processor.target_queue
+                        # Execute the task
+                        self.task_processor.execute_task(
+                            queue_name, task_name, args, kwargs
                         )
 
                         dispatched_count += 1
-                        logger.info(f"Dispatched pending task from {queue_name}")
+                        logger.info(
+                            f"Dispatched pending task {task_name} from {queue_name}"
+                        )
 
                     except json.JSONDecodeError as e:
-                        logger.error(f"Failed to decode task payload from {queue_name}: {e}")
+                        logger.error(
+                            f"Failed to decode task payload from {queue_name}: {e}"
+                        )
+                        self.queue_manager.increment_stat(queue_name, "tasks_failed", 1)
+                    except Exception as e:
+                        logger.error(f"Failed to execute task from {queue_name}: {e}")
                         self.queue_manager.increment_stat(queue_name, "tasks_failed", 1)
             else:
                 # Store when this queue should be checked again
@@ -202,7 +204,10 @@ class RateLimitedTaskDispatcher:
                 sleep_time = interval
                 if next_check_times:
                     current_time = time.time()
-                    min_wait_time = min(check_time - current_time for check_time in next_check_times.values())
+                    min_wait_time = min(
+                        check_time - current_time
+                        for check_time in next_check_times.values()
+                    )
                     if min_wait_time > 0:
                         # Sleep until the soonest token becomes available, but cap at interval
                         sleep_time = min(interval, min_wait_time)

@@ -1,15 +1,14 @@
-import uuid
-import time
-import json
-from typing import Dict, List, Optional, Any
-from datetime import datetime
-import redis
 import logging
+import uuid
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
-logger = logging.getLogger(__name__)
+import redis
 from pydantic import BaseModel
 
 from ..core.rate_limiter import RateLimit, TokenBucketRateLimiter
+
+logger = logging.getLogger(__name__)
 
 
 class QueueConfig(BaseModel):
@@ -17,11 +16,6 @@ class QueueConfig(BaseModel):
     rate_limit: RateLimit
     created_at: datetime
     active: bool = True
-
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
 
 
 class QueueStats(BaseModel):
@@ -40,29 +34,29 @@ class UniversalQueueManager:
 
     def __init__(self, redis_client: redis.Redis, queue_prefix: str = "throttle"):
         self.redis = redis_client
-        self.rate_limiter = TokenBucketRateLimiter(redis_client)
+        # Pass the prefix with colon to the rate limiter so it can build keys correctly
+        key_prefix = f"{queue_prefix}:" if queue_prefix else ""
+        self.rate_limiter = TokenBucketRateLimiter(redis_client, key_prefix=key_prefix)
         self.queue_prefix = queue_prefix
         self._queues_key = f"{queue_prefix}:queues:config"
         self._stats_key_prefix = f"{queue_prefix}:queues:stats"
 
-    def create_queue(self, rate_limit_str: str) -> str:
+    def create_queue(self, rate_limit_str: str, queue_name: str = None) -> str:
         """Create a new dynamic queue with specified rate limit."""
-        queue_name = f"batch_{uuid.uuid4()}"
+        if queue_name is None:
+            queue_name = f"batch_{uuid.uuid4()}"
+
         rate_limit = RateLimit.from_string(rate_limit_str)
 
         queue_config = QueueConfig(
             name=queue_name,
             rate_limit=rate_limit,
             created_at=datetime.now(),
-            active=True
+            active=True,
         )
 
         # Store queue configuration
-        self.redis.hset(
-            self._queues_key,
-            queue_name,
-            queue_config.model_dump_json()
-        )
+        self.redis.hset(self._queues_key, queue_name, queue_config.model_dump_json())
 
         # Initialize stats
         self._init_queue_stats(queue_name, queue_config)
@@ -110,11 +104,7 @@ class UniversalQueueManager:
         queue_config.rate_limit = rate_limit
 
         # Store updated configuration
-        self.redis.hset(
-            self._queues_key,
-            queue_name,
-            queue_config.model_dump_json()
-        )
+        self.redis.hset(self._queues_key, queue_name, queue_config.model_dump_json())
 
         logger.info(f"Updated queue {queue_name} rate limit to {rate_limit_str}")
         return True
@@ -136,11 +126,7 @@ class UniversalQueueManager:
         queue_config = QueueConfig.model_validate_json(queue_config_json)
 
         queue_config.active = active
-        self.redis.hset(
-            self._queues_key,
-            queue_name,
-            queue_config.model_dump_json()
-        )
+        self.redis.hset(self._queues_key, queue_name, queue_config.model_dump_json())
 
         action = "activated" if active else "deactivated"
         logger.info(f"Queue {queue_name} {action}")
@@ -179,9 +165,9 @@ class UniversalQueueManager:
             "tasks_processing": 0,
             "tasks_completed": 0,
             "tasks_failed": 0,
-            "created_at": queue_config.created_at.isoformat()
+            "created_at": queue_config.created_at.isoformat(),
         }
-        self.redis.hmset(stats_key, stats_data)
+        self.redis.hset(stats_key, mapping=stats_data)
 
     def get_queue_stats(self, queue_name: str) -> Optional[QueueStats]:
         """Get current statistics for a queue."""
@@ -209,10 +195,10 @@ class UniversalQueueManager:
             rate_limit=queue_config.rate_limit,
             tasks_waiting=tasks_waiting,
             tasks_processing=tasks_processing,
-            tasks_completed=int(stats_data.get(b'tasks_completed', 0)),
-            tasks_failed=int(stats_data.get(b'tasks_failed', 0)),
+            tasks_completed=int(stats_data.get(b"tasks_completed", 0)),
+            tasks_failed=int(stats_data.get(b"tasks_failed", 0)),
             created_at=queue_config.created_at,
-            active=queue_config.active
+            active=queue_config.active,
         )
 
     def increment_stat(self, queue_name: str, stat_name: str, amount: int = 1):
@@ -220,15 +206,14 @@ class UniversalQueueManager:
         stats_key = f"{self._stats_key_prefix}:{queue_name}"
         self.redis.hincrby(stats_key, stat_name, amount)
 
-    def can_process_task(self, queue_name: str) -> tuple[bool, float]:
+    def can_process_task(self, queue_name: str) -> Tuple[bool, float]:
         """Check if a task can be processed immediately (has available token)."""
         queue_config = self.get_queue_config(queue_name)
         if not queue_config or not queue_config.active:
             return False, 0.0
 
-        # Use prefixed bucket key for rate limiting
-        bucket_key = f"{self.queue_prefix}:rate_limit:{queue_name}"
-        return self.rate_limiter.try_acquire(bucket_key, queue_config.rate_limit)
+        # Rate limiter now handles the prefix internally
+        return self.rate_limiter.try_acquire(queue_name, queue_config.rate_limit)
 
     def get_rate_limit_status(self, queue_name: str) -> Optional[Dict[str, Any]]:
         """Get current rate limit status for a queue."""
@@ -236,6 +221,5 @@ class UniversalQueueManager:
         if not queue_config:
             return None
 
-        # Use prefixed bucket key for rate limiting
-        bucket_key = f"{self.queue_prefix}:rate_limit:{queue_name}"
-        return self.rate_limiter.get_status(bucket_key, queue_config.rate_limit)
+        # Rate limiter now handles the prefix internally
+        return self.rate_limiter.get_status(queue_name, queue_config.rate_limit)

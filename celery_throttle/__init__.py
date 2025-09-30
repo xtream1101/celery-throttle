@@ -6,11 +6,15 @@ using Celery workers and token bucket algorithms.
 """
 
 from .core.rate_limiter import RateLimit, TokenBucketRateLimiter
-from .queue.manager import UniversalQueueManager, QueueConfig, QueueStats
-from .tasks.processor import RateLimitedTaskProcessor, RateLimitedTaskSubmitter, RateLimitedTaskDispatcher
 from .main import CeleryThrottle
+from .queue.manager import QueueConfig, QueueStats, UniversalQueueManager
+from .tasks.processor import (
+    RateLimitedTaskDispatcher,
+    RateLimitedTaskProcessor,
+    RateLimitedTaskSubmitter,
+)
 
-__version__ = "0.1.0"
+__version__ = "0.1.0b1"
 __all__ = [
     "CeleryThrottle",
     "RateLimit",

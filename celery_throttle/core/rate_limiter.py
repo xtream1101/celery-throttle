@@ -1,13 +1,12 @@
-import time
-import uuid
-from typing import Dict, Optional, Tuple
-from datetime import datetime, timedelta
-import redis
 import logging
+import re
+import time
+from typing import Dict, Tuple
+
+import redis
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
-from pydantic import BaseModel
-import re
 
 
 class RateLimit(BaseModel):
@@ -19,10 +18,12 @@ class RateLimit(BaseModel):
     def from_string(cls, rate_string: str) -> "RateLimit":
         """Parse rate limit string like '10/60s', '10/5m', '4000/3h' or '10/60s:5' into RateLimit object."""
         # Pattern supports optional burst allowance and time units (s/m/h): '10/60s', '10/5m', '4000/3h', or '10/60s:5'
-        pattern = r'^(\d+)/(\d+)([smh])(?::(\d+))?$'
+        pattern = r"^(\d+)/(\d+)([smh])(?::(\d+))?$"
         match = re.match(pattern, rate_string)
         if not match:
-            raise ValueError(f"Invalid rate limit format: {rate_string}. Expected format: '10/60s', '10/5m', '4000/3h', or '10/60s:5'")
+            raise ValueError(
+                f"Invalid rate limit format: {rate_string}. Expected format: '10/60s', '10/5m', '4000/3h', or '10/60s:5'"
+            )
 
         requests = int(match.group(1))
         period_value = int(match.group(2))
@@ -35,32 +36,38 @@ class RateLimit(BaseModel):
         if period_value <= 0:
             raise ValueError(f"Period must be positive, got: {period_value}")
         if burst_allowance <= 0:
-            raise ValueError(f"Burst allowance must be positive, got: {burst_allowance}")
+            raise ValueError(
+                f"Burst allowance must be positive, got: {burst_allowance}"
+            )
 
         # Convert time period to seconds
-        if time_unit == 's':
+        if time_unit == "s":
             period_seconds = period_value
-        elif time_unit == 'm':
+        elif time_unit == "m":
             period_seconds = period_value * 60
-        elif time_unit == 'h':
+        elif time_unit == "h":
             period_seconds = period_value * 3600
 
-        return cls(requests=requests, period_seconds=period_seconds, burst_allowance=burst_allowance)
+        return cls(
+            requests=requests,
+            period_seconds=period_seconds,
+            burst_allowance=burst_allowance,
+        )
 
     def __str__(self) -> str:
         # Choose the most appropriate time unit for display
         if self.period_seconds % 3600 == 0:
             # Use hours if evenly divisible by 3600
             period_value = self.period_seconds // 3600
-            time_unit = 'h'
+            time_unit = "h"
         elif self.period_seconds % 60 == 0:
             # Use minutes if evenly divisible by 60
             period_value = self.period_seconds // 60
-            time_unit = 'm'
+            time_unit = "m"
         else:
             # Use seconds
             period_value = self.period_seconds
-            time_unit = 's'
+            time_unit = "s"
 
         if self.burst_allowance == 1:
             return f"{self.requests}/{period_value}{time_unit}"
@@ -71,8 +78,9 @@ class RateLimit(BaseModel):
 class TokenBucketRateLimiter:
     """Redis-based token bucket rate limiter with Lua scripts for atomic operations."""
 
-    def __init__(self, redis_client: redis.Redis):
+    def __init__(self, redis_client: redis.Redis, key_prefix: str = ""):
         self.redis = redis_client
+        self.key_prefix = key_prefix
         self._acquire_script = self._register_acquire_script()
         self._status_script = self._register_status_script()
 
@@ -153,7 +161,11 @@ class TokenBucketRateLimiter:
             - success: True if token was acquired, False otherwise
             - wait_time: seconds to wait before next token is available (0 if success)
         """
-        bucket_key = f"rate_limit:{queue_name}"
+        bucket_key = (
+            f"{self.key_prefix}rate_limit:{queue_name}"
+            if self.key_prefix
+            else f"rate_limit:{queue_name}"
+        )
         current_time = time.time()
 
         # Calculate refill rate (tokens per second)
@@ -162,12 +174,14 @@ class TokenBucketRateLimiter:
         try:
             result = self._acquire_script(
                 keys=[bucket_key],
-                args=[rate_limit.burst_allowance, refill_rate, current_time]
+                args=[rate_limit.burst_allowance, refill_rate, current_time],
             )
             success, remaining_tokens, wait_time = result
 
-            logger.debug(f"Token acquisition for {queue_name}: success={bool(success)}, "
-                        f"remaining={remaining_tokens}, wait={wait_time}s")
+            logger.debug(
+                f"Token acquisition for {queue_name}: success={bool(success)}, "
+                f"remaining={remaining_tokens}, wait={wait_time}s"
+            )
 
             return bool(success), float(wait_time)
 
@@ -178,7 +192,11 @@ class TokenBucketRateLimiter:
 
     def get_status(self, queue_name: str, rate_limit: RateLimit) -> Dict[str, float]:
         """Get current status of the token bucket."""
-        bucket_key = f"rate_limit:{queue_name}"
+        bucket_key = (
+            f"{self.key_prefix}rate_limit:{queue_name}"
+            if self.key_prefix
+            else f"rate_limit:{queue_name}"
+        )
         current_time = time.time()
 
         # Calculate refill rate (tokens per second)
@@ -187,7 +205,7 @@ class TokenBucketRateLimiter:
         try:
             result = self._status_script(
                 keys=[bucket_key],
-                args=[rate_limit.burst_allowance, refill_rate, current_time]
+                args=[rate_limit.burst_allowance, refill_rate, current_time],
             )
             available_tokens, next_token_time = result
 
@@ -195,8 +213,12 @@ class TokenBucketRateLimiter:
                 "available_tokens": float(available_tokens),
                 "capacity": float(rate_limit.burst_allowance),
                 "refill_rate": refill_rate,
-                "next_token_at": float(next_token_time) if next_token_time > 0 else None,
-                "next_token_in": max(0, float(next_token_time) - current_time) if next_token_time > 0 else 0
+                "next_token_at": float(next_token_time)
+                if next_token_time > 0
+                else None,
+                "next_token_in": max(0, float(next_token_time) - current_time)
+                if next_token_time > 0
+                else 0,
             }
 
         except redis.RedisError as e:
@@ -206,5 +228,5 @@ class TokenBucketRateLimiter:
                 "capacity": float(rate_limit.burst_allowance),
                 "refill_rate": refill_rate,
                 "next_token_at": None,
-                "next_token_in": 0.0
+                "next_token_in": 0.0,
             }

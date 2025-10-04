@@ -1,5 +1,6 @@
-import pytest
 from unittest.mock import Mock, patch
+
+import pytest
 from click.testing import CliRunner
 
 from celery_throttle.cli.main import cli, get_celery_app
@@ -87,8 +88,9 @@ class TestCLI:
     def test_queue_list_command_with_queues(self, runner, mock_queue_manager):
         """Test queue list command with queues."""
         from datetime import datetime
-        from celery_throttle.queue.manager import QueueConfig
+
         from celery_throttle.core.rate_limiter import RateLimit
+        from celery_throttle.queue.manager import QueueConfig
 
         mock_queues = [
             QueueConfig(
@@ -148,8 +150,9 @@ class TestCLI:
     def test_queue_show_command(self, runner, mock_queue_manager):
         """Test queue show command."""
         from datetime import datetime
-        from celery_throttle.queue.manager import QueueConfig, QueueStats
+
         from celery_throttle.core.rate_limiter import RateLimit
+        from celery_throttle.queue.manager import QueueConfig, QueueStats
 
         mock_config = QueueConfig(
             name="test_queue",
@@ -265,8 +268,9 @@ class TestCLI:
     ):
         """Test cleanup all queues command with user confirmation."""
         from datetime import datetime
-        from celery_throttle.queue.manager import QueueConfig
+
         from celery_throttle.core.rate_limiter import RateLimit
+        from celery_throttle.queue.manager import QueueConfig
 
         mock_queues = [
             QueueConfig(
@@ -291,8 +295,9 @@ class TestCLI:
     def test_queue_cleanup_all_command_cancelled(self, runner, mock_queue_manager):
         """Test cleanup all queues command when user cancels."""
         from datetime import datetime
-        from celery_throttle.queue.manager import QueueConfig
+
         from celery_throttle.core.rate_limiter import RateLimit
+        from celery_throttle.queue.manager import QueueConfig
 
         mock_queues = [
             QueueConfig(
@@ -316,8 +321,9 @@ class TestCLI:
     def test_queue_cleanup_empty_command(self, runner, mock_queue_manager):
         """Test cleanup empty queues command."""
         from datetime import datetime
-        from celery_throttle.queue.manager import QueueConfig, QueueStats
+
         from celery_throttle.core.rate_limiter import RateLimit
+        from celery_throttle.queue.manager import QueueConfig, QueueStats
 
         mock_queues = [
             QueueConfig(

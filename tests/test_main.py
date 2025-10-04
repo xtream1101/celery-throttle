@@ -1,7 +1,7 @@
 from unittest.mock import Mock, patch
 
-from celery_throttle.main import CeleryThrottle
 from celery_throttle.config import CeleryThrottleConfig
+from celery_throttle.main import CeleryThrottle
 from celery_throttle.tasks.processor import RateLimitedTaskProcessor
 
 

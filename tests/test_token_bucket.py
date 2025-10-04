@@ -1,7 +1,8 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 import redis
 
-from celery_throttle.core.rate_limiter import TokenBucketRateLimiter, RateLimit
+from celery_throttle.core.rate_limiter import RateLimit, TokenBucketRateLimiter
 
 
 class TestTokenBucketRateLimiter:

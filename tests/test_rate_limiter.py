@@ -1,4 +1,5 @@
 import pytest
+
 from celery_throttle.core.rate_limiter import RateLimit
 
 

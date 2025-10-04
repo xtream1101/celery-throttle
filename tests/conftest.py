@@ -1,12 +1,13 @@
-import pytest
-import fakeredis
-from celery import Celery
 from unittest.mock import Mock
 
+import fakeredis
+import pytest
+from celery import Celery
+
+from celery_throttle.config import CeleryThrottleConfig
 from celery_throttle.core.rate_limiter import RateLimit, TokenBucketRateLimiter
 from celery_throttle.queue.manager import UniversalQueueManager
 from celery_throttle.tasks.processor import RateLimitedTaskProcessor
-from celery_throttle.config import CeleryThrottleConfig
 
 
 @pytest.fixture

@@ -1,9 +1,10 @@
-from typing import Optional, Dict, Any
+import logging
+from typing import Any, Dict, Optional
+
 import redis
 from celery import Celery
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-import logging
 
 logger = logging.getLogger(__name__)
 

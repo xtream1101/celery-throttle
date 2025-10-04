@@ -1,9 +1,9 @@
 # Task processing functionality
 
 from .processor import (
+    RateLimitedTaskDispatcher,
     RateLimitedTaskProcessor,
     RateLimitedTaskSubmitter,
-    RateLimitedTaskDispatcher,
 )
 
 __all__ = [

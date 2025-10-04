@@ -1,6 +1,7 @@
 import pytest
+
 from celery_throttle import CeleryThrottle
-from celery_throttle.config import CeleryThrottleConfig, RedisConfig, CeleryConfig
+from celery_throttle.config import CeleryConfig, CeleryThrottleConfig, RedisConfig
 
 
 class TestLibraryIntegration:

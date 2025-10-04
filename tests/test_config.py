@@ -1,6 +1,6 @@
 from unittest.mock import Mock, patch
 
-from celery_throttle.config import RedisConfig, CeleryConfig, CeleryThrottleConfig
+from celery_throttle.config import CeleryConfig, CeleryThrottleConfig, RedisConfig
 
 
 class TestRedisConfig:

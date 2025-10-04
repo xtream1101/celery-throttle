@@ -1,6 +1,7 @@
-import pytest
 from datetime import datetime
 from unittest.mock import patch
+
+import pytest
 
 from celery_throttle.queue.manager import UniversalQueueManager
 

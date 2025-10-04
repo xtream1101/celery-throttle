@@ -1,4 +1,5 @@
 import pytest
+
 from celery_throttle import CeleryThrottle
 from celery_throttle.config import CeleryThrottleConfig
 

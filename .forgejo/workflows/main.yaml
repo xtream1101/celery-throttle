@@ -47,10 +47,15 @@ jobs:
 
       - name: Create tag
         run: |
+          set -euo pipefail
           git config --global user.email "forgejo-ci@gitx.codes"
           git config --global user.name "forgejo-ci"
-          # Get the version value from pyproject.toml
-          version=$(grep -oP '(?<=^version = ")[^"]*' pyproject.toml)
+          # Extract version from celery_throttle/__init__.py (double-quoted only)
+          version=$(sed -n 's/^__version__[[:space:]]*=[[:space:]]*"\([^"\]*\)".*$/\1/p' celery_throttle/__init__.py)
+          if [ -z "${version:-}" ]; then
+            echo "Unable to determine version from celery_throttle/__init__.py (expected double-quoted __version__)" >&2
+            exit 1
+          fi
           echo "Version: $version"
           # Create a tag with the version value
           git tag "v${version}" -m "Release v${version}"

@@ -1,6 +1,7 @@
 # Celery Throttle
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![PyPI version](https://img.shields.io/pypi/v/celery-throttle.svg)](https://pypi.org/project/celery-throttle/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **Advanced rate limiting and queue management for Celery workers using Redis-based token bucket algorithms.**
@@ -444,4 +445,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - [GitHub Repository](https://github.com/xtream1101/celery-throttle)
 - [Issue Tracker](https://github.com/xtream1101/celery-throttle/issues)
-- [PyPI Package](https://pypi.org/project/celery-throttle/) (coming soon)
+- [PyPI Package](https://pypi.org/project/celery-throttle/)

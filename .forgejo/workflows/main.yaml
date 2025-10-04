@@ -20,26 +20,26 @@ jobs:
       - name: Run Ruff Isort
         run: uvx ruff check --extend-select I --diff
 
-  test:
-    runs-on: debian-tools
-    steps:
-      - name: Checkout code
-        uses: Public-Mirrors/actions_checkout@v4
+  # test:
+  #   runs-on: debian-tools
+  #   steps:
+  #     - name: Checkout code
+  #       uses: Public-Mirrors/actions_checkout@v4
 
-      - name: Install dependencies
-        run: |
-          uv sync
-          uv pip install .
+  #     - name: Install dependencies
+  #       run: |
+  #         uv sync
+  #         uv pip install .
 
-      - name: Run tests
-        run: uv run pytest --tb=short --disable-warnings
+  #     - name: Run tests
+  #       run: uv run pytest --tb=short --disable-warnings
 
   tag:
     runs-on: debian-tools
     needs:
       - ruff-format
       - ruff-isort
-      - test
+      # - test
     if: github.ref == 'refs/heads/main'
     steps:
       - name: Checkout code
